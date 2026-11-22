@@ -1,0 +1,98 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import mongoose from 'mongoose';
+import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
+import { connectDB } from './config/db.js';
+import authRoutes from './routes/auth.js';
+import publicRoutes from './routes/public.js';
+import businessRoutes from './routes/business.js';
+import adminRoutes from './routes/admin.js';
+
+const app = express();
+const port = Number(process.env.PORT || 4000);
+
+const allowedOrigins = [
+  process.env.CLIENT_ORIGIN,
+  process.env.BUSINESS_ORIGIN,
+  process.env.ADMIN_ORIGIN,
+]
+  .filter(Boolean)
+  .flatMap((value) => value.split(','))
+  .map((origin) => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+app.use(helmet());
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Origen no permitido por CORS.'));
+    },
+    credentials: true,
+  }),
+);
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan('dev'));
+
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Demasiadas solicitudes. Intenta de nuevo más tarde.' },
+});
+
+app.get('/api/health', (_req, res) => {
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const databaseStatus = states[mongoose.connection.readyState] || 'unknown';
+  const ok = databaseStatus === 'connected';
+
+  res.status(ok ? 200 : 503).json({
+    ok,
+    service: 'dondecomo-api',
+    database: {
+      status: databaseStatus,
+      name: mongoose.connection.name || null,
+    },
+  });
+});
+
+app.use('/api/auth', writeLimiter, authRoutes);
+app.use('/api/ratings', writeLimiter);
+app.use('/api/business-requests', writeLimiter);
+app.use('/api', publicRoutes);
+app.use('/api/business', businessRoutes);
+app.use('/api/admin', adminRoutes);
+
+app.use((_req, res) => {
+  res.status(404).json({ message: 'Ruta no encontrada.' });
+});
+
+app.use((error, _req, res, _next) => {
+  if (error?.code === 11000) {
+    return res.status(409).json({
+      message: 'Ya existe un registro con esos datos.',
+    });
+  }
+  console.error(error);
+  return res.status(error.status || 500).json({
+    message: error.message || 'Error interno del servidor.',
+  });
+});
+
+async function start() {
+  await connectDB();
+  app.listen(port, () => {
+    console.log(`API dóndecomo escuchando en http://localhost:${port}/api`);
+  });
+}
+
+start().catch((error) => {
+  console.error('No se pudo iniciar la API:', error.message);
+  process.exit(1);
+});
