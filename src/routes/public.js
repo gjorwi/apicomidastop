@@ -4,6 +4,7 @@ import {
   BusinessRequest,
   Category,
   Product,
+  Promotion,
   Rating,
 } from '../models/index.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -88,6 +89,54 @@ router.get(
 );
 
 router.get(
+  '/promotions',
+  asyncHandler(async (_req, res) => {
+    const now = new Date();
+    const promotions = await Promotion.find({ isActive: true })
+      .sort({ order: 1, createdAt: -1 })
+      .lean();
+    const activePromotions = promotions.filter(
+      (promotion) =>
+        (!promotion.startsAt || promotion.startsAt <= now) &&
+        (!promotion.endsAt || promotion.endsAt >= now),
+    );
+    const productIds = activePromotions.map((promotion) => promotion.product);
+    const [products, businesses] = await Promise.all([
+      Product.find({ _id: { $in: productIds }, isActive: true }).lean(),
+      Business.find({ status: 'approved' }).lean(),
+    ]);
+    const productMap = new Map(
+      products.map((product) => [String(product._id), product]),
+    );
+    const businessMap = new Map(
+      businesses.map((business) => [String(business._id), business]),
+    );
+
+    res.json({
+      promotions: activePromotions
+        .filter((promotion) => productMap.has(String(promotion.product)))
+        .map((promotion) => {
+          const product = productMap.get(String(promotion.product));
+          const business = businessMap.get(String(promotion.business));
+          return {
+            id: String(promotion._id),
+            title: promotion.title,
+            note: promotion.note || '',
+            badge: promotion.badge || 'Oferta',
+            emoji: promotion.emoji || product.emoji || '🍽️',
+            tone: promotion.tone || 'accent',
+            price: promotion.price,
+            originalPrice: promotion.originalPrice,
+            productId: String(product._id),
+            businessId: business?.slug || '',
+            businessName: business?.name || '',
+          };
+        }),
+    });
+  }),
+);
+
+router.get(
   '/businesses',
   asyncHandler(async (req, res) => {
     const { open, category, q } = req.query;
@@ -117,6 +166,7 @@ router.get(
           business,
           metrics,
           categoryMap.get(business.categoryKey),
+          { withCover: true },
         );
       })
       .sort((a, b) => (b.score || 0) - (a.score || 0));

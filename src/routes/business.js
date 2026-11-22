@@ -13,6 +13,17 @@ import {
 
 const router = Router();
 
+const MAX_IMAGE_LENGTH = 700_000;
+
+function isValidImage(image) {
+  if (image === undefined || image === '') return true;
+  return (
+    typeof image === 'string' &&
+    /^data:image\/(jpeg|png|webp);base64,/.test(image) &&
+    image.length <= MAX_IMAGE_LENGTH
+  );
+}
+
 async function loadBusiness(req, res, next) {
   const business = await Business.findOne({ owner: req.user._id });
   if (!business) {
@@ -103,7 +114,37 @@ router.put(
       'hours',
       'emoji',
       'isOpen',
+      'municipality',
+      'parish',
+      'sector',
+      'categoryOther',
+      'hasDelivery',
+      'coverImage',
+      'location',
     ];
+    if (!isValidImage(req.body.coverImage)) {
+      return res.status(400).json({
+        message: 'La foto de portada debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
+      });
+    }
+    if (req.body.location !== undefined) {
+      const lat = req.body.location?.lat;
+      const lng = req.body.location?.lng;
+      const hasCoordinates = lat !== null && lng !== null;
+      if (
+        hasCoordinates &&
+        (typeof lat !== 'number' ||
+          typeof lng !== 'number' ||
+          !Number.isFinite(lat) ||
+          !Number.isFinite(lng) ||
+          lat < -90 ||
+          lat > 90 ||
+          lng < -180 ||
+          lng > 180)
+      ) {
+        return res.status(400).json({ message: 'Ubicación no válida.' });
+      }
+    }
     for (const key of allowed) {
       if (req.body[key] !== undefined) req.business[key] = req.body[key];
     }
@@ -132,11 +173,16 @@ router.get(
 router.post(
   '/me/products',
   asyncHandler(async (req, res) => {
-    const { name, description, price, categoryKey, emoji } = req.body || {};
+    const { name, description, price, categoryKey, emoji, image } = req.body || {};
     const numericPrice = Number(price);
     if (!name || !categoryKey || !Number.isFinite(numericPrice) || numericPrice <= 0) {
       return res.status(400).json({
         message: 'Nombre, categoría y precio válido son obligatorios.',
+      });
+    }
+    if (!isValidImage(image)) {
+      return res.status(400).json({
+        message: 'La imagen del plato debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
       });
     }
     const category = await Category.findOne({ key: categoryKey, isActive: true });
@@ -150,6 +196,7 @@ router.post(
       description: description || '',
       price: numericPrice,
       emoji: emoji || '🍽️',
+      image: image || '',
       isAvailable: req.body.isAvailable ?? true,
       isActive: req.body.isActive ?? true,
     });
@@ -173,9 +220,15 @@ router.put(
       'price',
       'categoryKey',
       'emoji',
+      'image',
       'isActive',
       'isAvailable',
     ];
+    if (!isValidImage(req.body.image)) {
+      return res.status(400).json({
+        message: 'La imagen del plato debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
+      });
+    }
     for (const key of allowed) {
       if (req.body[key] !== undefined) product[key] = req.body[key];
     }

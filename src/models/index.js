@@ -70,6 +70,7 @@ const ProductSchema = new Schema(
     description: { type: String, default: '' },
     price: { type: Number, required: true, min: 0 },
     emoji: { type: String, default: '🍽️' },
+    image: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
     isAvailable: { type: Boolean, default: true },
   },
@@ -175,6 +176,29 @@ const RankingSnapshotSchema = new Schema(
 
 RankingSnapshotSchema.index({ period: 1, categoryKey: 1 }, { unique: true });
 
+const PromotionSchema = new Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    note: { type: String, default: '' },
+    badge: { type: String, default: 'Oferta' },
+    emoji: { type: String, default: '🍽️' },
+    tone: {
+      type: String,
+      enum: ['accent', 'amber', 'green'],
+      default: 'accent',
+    },
+    price: { type: Number, required: true, min: 0 },
+    originalPrice: { type: Number, default: null },
+    product: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
+    business: { type: Schema.Types.ObjectId, ref: 'Business', required: true },
+    isActive: { type: Boolean, default: true, index: true },
+    startsAt: { type: Date, default: null },
+    endsAt: { type: Date, default: null },
+    order: { type: Number, default: 0 },
+  },
+  { timestamps: true },
+);
+
 export const Category = models.Category || model('Category', CategorySchema);
 export const Business = models.Business || model('Business', BusinessSchema);
 export const Product = models.Product || model('Product', ProductSchema);
@@ -184,3 +208,5 @@ export const BusinessRequest =
   models.BusinessRequest || model('BusinessRequest', BusinessRequestSchema);
 export const RankingSnapshot =
   models.RankingSnapshot || model('RankingSnapshot', RankingSnapshotSchema);
+export const Promotion =
+  models.Promotion || model('Promotion', PromotionSchema);

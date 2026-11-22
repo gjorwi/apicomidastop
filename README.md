@@ -48,6 +48,7 @@ El endpoint `GET /api/health` informa el estado del servicio y de la conexión c
 ### Públicos
 
 - `GET /categories`
+- `GET /promotions`
 - `GET /businesses`
 - `GET /businesses/:slug`
 - `GET /products`
