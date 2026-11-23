@@ -120,12 +120,35 @@ router.put(
       'categoryOther',
       'hasDelivery',
       'coverImage',
+      'locationReference',
       'location',
     ];
     if (!isValidImage(req.body.coverImage)) {
       return res.status(400).json({
         message: 'La foto de portada debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
       });
+    }
+    const deliveryFeeFields = [
+      'deliveryShortFee',
+      'deliveryLongFee',
+      'freeDeliveryFrom',
+    ];
+    for (const key of deliveryFeeFields) {
+      if (req.body[key] === undefined) continue;
+      if (req.body[key] === null || req.body[key] === '') {
+        req.business[key] = null;
+        continue;
+      }
+      const value = Number(req.body[key]);
+      if (!Number.isFinite(value) || value < 0) {
+        return res.status(400).json({
+          message: 'Las tarifas de delivery deben ser números mayores o iguales a cero.',
+        });
+      }
+      req.business[key] = value;
+    }
+    if (req.body.hasDelivery === false) {
+      for (const key of deliveryFeeFields) req.business[key] = null;
     }
     if (req.body.location !== undefined) {
       const lat = req.body.location?.lat;

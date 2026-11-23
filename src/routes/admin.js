@@ -328,7 +328,30 @@ router.get(
   '/users',
   asyncHandler(async (_req, res) => {
     const users = await User.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ users: users.map(serializeUser) });
+    const businessIds = users
+      .map((user) => user.business)
+      .filter(Boolean);
+    const businesses = businessIds.length
+      ? await Business.find({ _id: { $in: businessIds } })
+          .select('name slug')
+          .lean()
+      : [];
+    const businessMap = new Map(
+      businesses.map((business) => [String(business._id), business]),
+    );
+
+    res.json({
+      users: users.map((user) => {
+        const business = user.business
+          ? businessMap.get(String(user.business))
+          : null;
+        return {
+          ...serializeUser(user),
+          businessName: business?.name || null,
+          businessSlug: business?.slug || null,
+        };
+      }),
+    });
   }),
 );
 
@@ -396,6 +419,39 @@ router.patch(
       return res.status(404).json({ message: 'Usuario no encontrado.' });
     }
     res.json({ user: serializeUser(user) });
+  }),
+);
+
+router.post(
+  '/users/:id/reset-password',
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado.' });
+    }
+
+    const providedPassword = req.body?.password
+      ? String(req.body.password)
+      : '';
+    if (providedPassword && providedPassword.length < 8) {
+      return res.status(400).json({
+        message: 'La contraseña debe tener al menos 8 caracteres.',
+      });
+    }
+
+    const password =
+      providedPassword || randomBytes(6).toString('base64url');
+    user.passwordHash = await bcrypt.hash(password, 10);
+    await user.save();
+
+    res.json({
+      message: 'Contraseña actualizada.',
+      user: serializeUser(user),
+      credentials: {
+        email: user.email,
+        password,
+      },
+    });
   }),
 );
 

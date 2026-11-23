@@ -1,3 +1,15 @@
+function formatDisplayName(value) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+
+  const lower = text.toLocaleLowerCase('es');
+  const upper = text.toLocaleUpperCase('es');
+  // Respeta nombres que ya tienen una combinación intencional de mayúsculas.
+  if (text !== lower && text !== upper) return text;
+
+  return lower.charAt(0).toLocaleUpperCase('es') + lower.slice(1);
+}
+
 export function serializeCategory(category) {
   return {
     id: category.key,
@@ -17,11 +29,16 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
     (business.categoryKey === 'otro'
       ? business.categoryOther || 'Otro'
       : business.categoryKey);
+  const offeredCategories = metrics.offeredCategories?.length
+    ? metrics.offeredCategories
+    : categoryLabel
+      ? [{ id: business.categoryKey, label: categoryLabel }]
+      : [];
 
   return {
     id: business.slug,
     _id: String(business._id),
-    name: business.name,
+    name: formatDisplayName(business.name),
     categoryKey: business.categoryKey,
     category: categoryLabel,
     categoryOther: business.categoryOther || '',
@@ -34,7 +51,11 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
       lng: business.location?.lng ?? null,
     },
     hasDelivery: Boolean(business.hasDelivery),
+    deliveryShortFee: business.deliveryShortFee ?? null,
+    deliveryLongFee: business.deliveryLongFee ?? null,
+    freeDeliveryFrom: business.freeDeliveryFrom ?? null,
     address: business.address,
+    locationReference: business.locationReference || '',
     phone: business.phone,
     whatsapp: business.whatsapp,
     description: business.description,
@@ -50,6 +71,7 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
     ratedProducts: metrics.ratedProducts ?? 0,
     activeProducts: metrics.activeProducts ?? 0,
     categories: metrics.categories || [],
+    offeredCategories,
     recognition: business.recognition?.status
       ? {
           position: business.recognition.position,
@@ -68,9 +90,9 @@ export function serializeProduct(product, business = null, metrics = {}) {
   return {
     id: String(product._id),
     _id: String(product._id),
-    name: product.name,
+    name: formatDisplayName(product.name),
     businessId: business?.slug || String(product.business),
-    businessName: business?.name || null,
+    businessName: business ? formatDisplayName(business.name) : null,
     businessMunicipality: business?.municipality || '',
     businessParish: business?.parish || '',
     businessSector: business?.sector || '',
@@ -97,13 +119,29 @@ export function serializeUser(user) {
     role: user.role,
     status: user.status,
     business: user.business ? String(user.business) : null,
+    createdAt: user.createdAt,
+  };
+}
+
+export function serializeVisit(visit) {
+  const maxVotes = visit.maxVotes ?? 2;
+  const votesUsed = visit.votesUsed ?? 0;
+  return {
+    id: String(visit._id),
+    businessId: String(visit.business),
+    status: visit.status,
+    votesUsed,
+    maxVotes,
+    votesRemaining: Math.max(0, maxVotes - votesUsed),
+    expiresAt: visit.expiresAt,
+    createdAt: visit.createdAt,
   };
 }
 
 export function serializeRequest(request, options = {}) {
   return {
     id: String(request._id),
-    businessName: request.businessName,
+    businessName: formatDisplayName(request.businessName),
     ownerName: request.ownerName,
     email: request.email,
     phone: request.phone,

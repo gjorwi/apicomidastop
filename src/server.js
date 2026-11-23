@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { connectDB } from './config/db.js';
+import { Visit } from './models/index.js';
 import authRoutes from './routes/auth.js';
 import publicRoutes from './routes/public.js';
 import businessRoutes from './routes/business.js';
@@ -64,6 +65,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/auth', writeLimiter, authRoutes);
 app.use('/api/ratings', writeLimiter);
+app.use('/api/businesses/:slug/scan', writeLimiter);
 app.use('/api/business-requests', writeLimiter);
 app.use('/api', publicRoutes);
 app.use('/api/business', businessRoutes);
@@ -87,6 +89,19 @@ app.use((error, _req, res, _next) => {
 
 async function start() {
   await connectDB();
+
+  const expireVisits = () =>
+    Visit.updateMany(
+      { status: 'active', expiresAt: { $lte: new Date() } },
+      { $set: { status: 'expired' } },
+    ).catch((error) => {
+      console.error('No se pudieron expirar las visitas:', error.message);
+    });
+
+  await expireVisits();
+  const expiryTimer = setInterval(expireVisits, 5 * 60 * 1000);
+  expiryTimer.unref?.();
+
   app.listen(port, () => {
     console.log(`API dóndecomo escuchando en http://localhost:${port}/api`);
   });

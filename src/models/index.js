@@ -31,7 +31,11 @@ const BusinessSchema = new Schema(
     parish: { type: String, default: '', trim: true },
     sector: { type: String, default: '', trim: true },
     hasDelivery: { type: Boolean, default: false },
+    deliveryShortFee: { type: Number, default: null, min: 0 },
+    deliveryLongFee: { type: Number, default: null, min: 0 },
+    freeDeliveryFrom: { type: Number, default: null, min: 0 },
     coverImage: { type: String, default: '' },
+    locationReference: { type: String, default: '', trim: true },
     location: {
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
@@ -92,6 +96,33 @@ const RatingSchema = new Schema(
 RatingSchema.index(
   { product: 1, deviceId: 1, period: 1 },
   { unique: true },
+);
+
+const VisitSchema = new Schema(
+  {
+    business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    deviceId: { type: String, required: true, trim: true },
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null },
+    distanceMeters: { type: Number, default: null, min: 0 },
+    status: {
+      type: String,
+      enum: ['active', 'used', 'expired'],
+      default: 'active',
+      index: true,
+    },
+    votesUsed: { type: Number, default: 0, min: 0 },
+    maxVotes: { type: Number, default: 2, min: 1 },
+    expiresAt: { type: Date, required: true, index: true },
+  },
+  { timestamps: true },
+);
+
+VisitSchema.index({ business: 1, deviceId: 1, status: 1 });
+VisitSchema.index({ business: 1, deviceId: 1, createdAt: -1 });
+VisitSchema.index(
+  { business: 1, deviceId: 1 },
+  { unique: true, partialFilterExpression: { status: 'active' } },
 );
 
 const UserSchema = new Schema(
@@ -203,6 +234,7 @@ export const Category = models.Category || model('Category', CategorySchema);
 export const Business = models.Business || model('Business', BusinessSchema);
 export const Product = models.Product || model('Product', ProductSchema);
 export const Rating = models.Rating || model('Rating', RatingSchema);
+export const Visit = models.Visit || model('Visit', VisitSchema);
 export const User = models.User || model('User', UserSchema);
 export const BusinessRequest =
   models.BusinessRequest || model('BusinessRequest', BusinessRequestSchema);

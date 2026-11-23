@@ -6,8 +6,10 @@ import {
   Product,
   Promotion,
   Rating,
+  Visit,
 } from '../models/index.js';
 import { asyncHandler } from '../utils/async-handler.js';
+import { distanceInMeters, isValidCoordinates, SCAN_RADIUS_METERS } from '../utils/geo.js';
 import {
   buildCategoryRanking,
   computeBusinessMetrics,
@@ -19,12 +21,27 @@ import {
   serializeCategory,
   serializeProduct,
   serializeRequest,
+  serializeVisit,
 } from '../utils/serializers.js';
 
 const router = Router();
 
 const TERMS_VERSION = '2026-11';
 const MAX_COVER_LENGTH = 700_000;
+const VISIT_MAX_VOTES = 2;
+const VISIT_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function expireStaleVisits(businessId, deviceId) {
+  await Visit.updateMany(
+    {
+      business: businessId,
+      deviceId,
+      status: 'active',
+      expiresAt: { $lte: new Date() },
+    },
+    { $set: { status: 'expired' } },
+  );
+}
 
 async function getCatalog() {
   const [categories, businesses, products, ratings] = await Promise.all([
@@ -219,6 +236,131 @@ router.get(
   }),
 );
 
+router.post(
+  '/businesses/:slug/scan',
+  asyncHandler(async (req, res) => {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const location = req.body?.location;
+
+    if (!deviceId) {
+      return res.status(400).json({
+        message: 'No pudimos identificar este dispositivo. Recarga la página e intenta de nuevo.',
+      });
+    }
+    if (!isValidCoordinates(location)) {
+      return res.status(400).json({
+        message: 'Activa la ubicación del dispositivo para validar que estás en el local.',
+      });
+    }
+
+    const business = await Business.findOne({
+      slug: req.params.slug,
+      status: 'approved',
+    }).lean();
+    if (!business) {
+      return res.status(404).json({ message: 'Establecimiento no encontrado.' });
+    }
+    if (!isValidCoordinates(business.location)) {
+      return res.status(409).json({
+        message:
+          'Este establecimiento todavía no tiene una ubicación validada para habilitar las votaciones.',
+      });
+    }
+
+    const distance = distanceInMeters(location, business.location);
+    if (distance === null || distance > SCAN_RADIUS_METERS) {
+      return res.status(403).json({
+        message: `No pudimos confirmar tu visita: debes estar a menos de ${SCAN_RADIUS_METERS} m del local.`,
+        distanceMeters: distance === null ? null : Math.round(distance),
+        radiusMeters: SCAN_RADIUS_METERS,
+      });
+    }
+
+    await expireStaleVisits(business._id, deviceId);
+
+    const now = new Date();
+    let created = false;
+    let visit = await Visit.findOne({
+      business: business._id,
+      deviceId,
+      status: 'active',
+      expiresAt: { $gt: now },
+    });
+
+    if (!visit) {
+      try {
+        visit = await Visit.create({
+          business: business._id,
+          deviceId,
+          lat: location.lat,
+          lng: location.lng,
+          distanceMeters: Math.round(distance),
+          status: 'active',
+          votesUsed: 0,
+          maxVotes: VISIT_MAX_VOTES,
+          expiresAt: new Date(now.getTime() + VISIT_TTL_MS),
+        });
+        created = true;
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        visit = await Visit.findOne({
+          business: business._id,
+          deviceId,
+          status: 'active',
+          expiresAt: { $gt: now },
+        });
+      }
+    }
+
+    if (!visit) {
+      return res.status(409).json({
+        message: 'No pudimos registrar el escaneo. Intenta de nuevo.',
+      });
+    }
+
+    return res.status(created ? 201 : 200).json({
+      verified: true,
+      distanceMeters: Math.round(distance),
+      radiusMeters: SCAN_RADIUS_METERS,
+      visit: serializeVisit(visit),
+    });
+  }),
+);
+
+router.get(
+  '/businesses/:slug/scan',
+  asyncHandler(async (req, res) => {
+    const deviceId = String(req.query.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(400).json({
+        message: 'No pudimos identificar este dispositivo. Recarga la página e intenta de nuevo.',
+      });
+    }
+
+    const business = await Business.findOne({
+      slug: req.params.slug,
+      status: 'approved',
+    }).lean();
+    if (!business) {
+      return res.status(404).json({ message: 'Establecimiento no encontrado.' });
+    }
+
+    await expireStaleVisits(business._id, deviceId);
+
+    const visit = await Visit.findOne({
+      business: business._id,
+      deviceId,
+      status: 'active',
+      expiresAt: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    return res.json({
+      visit: visit ? serializeVisit(visit) : null,
+      radiusMeters: SCAN_RADIUS_METERS,
+    });
+  }),
+);
+
 router.get(
   '/products',
   asyncHandler(async (req, res) => {
@@ -358,13 +500,21 @@ router.get(
 router.post(
   '/ratings',
   asyncHandler(async (req, res) => {
-    const { productId, deviceId, score } = req.body || {};
+    const { productId, deviceId, score, visitId } = req.body || {};
     const numericScore = Number(score);
+    const normalizedDeviceId = String(deviceId || '').trim();
+    const normalizedVisitId = String(visitId || '').trim();
 
-    if (!productId || !deviceId) {
+    if (!productId || !normalizedDeviceId) {
       return res
         .status(400)
         .json({ message: 'Faltan el plato o el identificador del dispositivo.' });
+    }
+    if (
+      normalizedVisitId &&
+      !/^[a-f0-9]{24}$/i.test(normalizedVisitId)
+    ) {
+      return res.status(400).json({ message: 'El escaneo indicado no es válido.' });
     }
     if (!Number.isInteger(numericScore) || numericScore < 1 || numericScore > 5) {
       return res
@@ -381,19 +531,73 @@ router.post(
       return res.status(404).json({ message: 'Establecimiento no disponible.' });
     }
 
-    const period = getPeriod();
-    const rating = await Rating.findOneAndUpdate(
+    const now = new Date();
+
+    const existingRating = await Rating.findOne({
+      product: product._id,
+      deviceId: normalizedDeviceId,
+    }).lean();
+    if (existingRating) {
+      return res.status(409).json({
+        message: 'Ya puntuaste este plato con este dispositivo. Cada plato admite un solo voto.',
+      });
+    }
+
+    await expireStaleVisits(business._id, normalizedDeviceId);
+
+    const visitFilter = {
+      business: business._id,
+      deviceId: normalizedDeviceId,
+      status: 'active',
+      expiresAt: { $gt: now },
+    };
+    if (normalizedVisitId) visitFilter._id = normalizedVisitId;
+
+    const activeVisit = await Visit.findOne(visitFilter).lean();
+    if (!activeVisit) {
+      return res.status(403).json({
+        message:
+          'Escanea el QR del local y permite tu ubicación para validar la visita antes de puntuar.',
+      });
+    }
+    if ((activeVisit.votesUsed ?? 0) >= (activeVisit.maxVotes ?? VISIT_MAX_VOTES)) {
+      return res.status(409).json({
+        message:
+          'Ya usaste los 2 votos de este escaneo. Escanea el QR nuevamente para seguir puntuando otros platos.',
+      });
+    }
+
+    const rating = await Rating.create({
+      product: product._id,
+      business: business._id,
+      deviceId: normalizedDeviceId,
+      period: getPeriod(),
+      score: numericScore,
+    });
+
+    const visit = await Visit.findOneAndUpdate(
       {
-        product: product._id,
-        deviceId: String(deviceId),
-        period,
+        _id: activeVisit._id,
+        status: 'active',
+        expiresAt: { $gt: now },
+        votesUsed: { $lt: activeVisit.maxVotes ?? VISIT_MAX_VOTES },
       },
-      {
-        $set: { score: numericScore, business: business._id },
-        $setOnInsert: { product: product._id, deviceId: String(deviceId), period },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { $inc: { votesUsed: 1 } },
+      { new: true },
     );
+
+    if (!visit) {
+      await Rating.deleteOne({ _id: rating._id });
+      return res.status(409).json({
+        message:
+          'Ya usaste los 2 votos de este escaneo. Escanea el QR nuevamente para seguir puntuando otros platos.',
+      });
+    }
+
+    if (visit.votesUsed >= visit.maxVotes) {
+      visit.status = 'used';
+      await visit.save();
+    }
 
     const [category, ratings] = await Promise.all([
       Category.findOne({ key: product.categoryKey }).lean(),
@@ -412,6 +616,7 @@ router.post(
         score: rating.score,
         period: rating.period,
       },
+      visit: serializeVisit(visit),
       product: serializeProduct(product, business, metrics),
     });
   }),

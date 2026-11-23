@@ -51,6 +51,8 @@ El endpoint `GET /api/health` informa el estado del servicio y de la conexión c
 - `GET /promotions`
 - `GET /businesses`
 - `GET /businesses/:slug`
+- `POST /businesses/:slug/scan`
+- `GET /businesses/:slug/scan?deviceId=...`
 - `GET /products`
 - `GET /products/:id`
 - `GET /rankings/:categoryKey`
@@ -88,17 +90,23 @@ Requieren token de administrador.
 - `GET /admin/products`
 - `GET /admin/users`
 - `PATCH /admin/users/:id`
+- `POST /admin/users/:id/reset-password`
 - `GET /admin/categories`
 - `PATCH /admin/categories/:key`
 - `GET /admin/rankings`
 - `POST /admin/rankings/publish`
 - `DELETE /admin/ratings/:id`
 
+El reset de contraseña acepta una contraseña manual de al menos 8 caracteres o, si se envía vacía, genera una automática y la devuelve una sola vez.
+
 ## Reglas de calificación
 
-- Una calificación por plato, dispositivo y mes.
+- Antes de votar, el cliente debe escanear el QR del local con la ubicación activada.
+- El escaneo se valida contra la ubicación del negocio y solo se habilita si el cliente está a menos de 150 metros.
+- Cada escaneo válido registra una visita con 2 votos disponibles y vence a las 24 horas.
+- Al usar los 2 votos o al vencer el plazo, la visita queda como histórica (`used` o `expired`).
+- Un mismo dispositivo solo puede puntuar una vez cada plato.
 - Escala entera de 1 a 5.
-- Se puede corregir durante el mismo periodo.
 - El Top 3 usa las calificaciones de los últimos 12 meses, con peso por antigüedad y mínimo de cinco calificaciones.
 - La publicación mensual guarda una captura de los rankings y no altera las capturas anteriores.
 - Si una categoría no tiene calificaciones suficientes, no se genera una captura vacía.

@@ -2,13 +2,17 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { connectDB } from './config/db.js';
-import { Category, User } from './models/index.js';
+import { Category, User, Visit } from './models/index.js';
 import { baseCategories } from './data/categories.js';
 
 async function bootstrap() {
   await connectDB();
 
-  await Promise.all([Category.syncIndexes(), User.syncIndexes()]);
+  await Promise.all([
+    Category.syncIndexes(),
+    User.syncIndexes(),
+    Visit.syncIndexes(),
+  ]);
 
   let createdCategories = 0;
   let updatedCategories = 0;

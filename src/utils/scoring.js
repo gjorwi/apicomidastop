@@ -116,6 +116,12 @@ export function computeBusinessMetrics({
     })
     .filter(Boolean);
 
+  const offeredCategories = categories
+    .filter((category) =>
+      activeProducts.some((product) => product.categoryKey === category.key),
+    )
+    .map((category) => ({ id: category.key, label: category.name }));
+
   return {
     score: score === null ? null : Number(score.toFixed(2)),
     ratingsCount: ratedProducts.reduce(
@@ -126,6 +132,7 @@ export function computeBusinessMetrics({
     activeProducts: activeProducts.length,
     availableProducts: activeProducts.filter((product) => product.isAvailable).length,
     categories: categoryScores,
+    offeredCategories,
     productMetrics,
   };
 }
