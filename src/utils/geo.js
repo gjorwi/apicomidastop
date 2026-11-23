@@ -1,5 +1,3 @@
-export const SCAN_RADIUS_METERS = 150;
-
 const EARTH_RADIUS_METERS = 6_371_000;
 
 function toRadians(value) {

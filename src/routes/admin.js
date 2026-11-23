@@ -18,6 +18,10 @@ import {
   getPeriod,
 } from '../utils/scoring.js';
 import {
+  getPlatformSettings,
+  updatePlatformSettings,
+} from '../utils/settings.js';
+import {
   serializeBusiness,
   serializeCategory,
   serializeProduct,
@@ -84,6 +88,36 @@ router.get(
         snapshots,
       },
     });
+  }),
+);
+
+router.get(
+  '/settings',
+  asyncHandler(async (_req, res) => {
+    const settings = await getPlatformSettings();
+    res.json({ settings });
+  }),
+);
+
+router.patch(
+  '/settings',
+  asyncHandler(async (req, res) => {
+    const scanRadiusMeters = Number(req.body?.scanRadiusMeters);
+    if (
+      !Number.isInteger(scanRadiusMeters) ||
+      scanRadiusMeters < 1 ||
+      scanRadiusMeters > 500
+    ) {
+      return res.status(400).json({
+        message: 'El radio debe ser un número entero entre 1 y 500 metros.',
+      });
+    }
+
+    const settings = await updatePlatformSettings({
+      scanRadiusMeters,
+      updatedBy: req.user._id,
+    });
+    res.json({ settings });
   }),
 );
 

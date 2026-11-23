@@ -83,6 +83,8 @@ Requieren token de negocio aprobado.
 Requieren token de administrador.
 
 - `GET /admin/stats`
+- `GET /admin/settings`
+- `PATCH /admin/settings`
 - `GET /admin/requests`
 - `PATCH /admin/requests/:id`
 - `GET /admin/businesses`
@@ -102,7 +104,7 @@ El reset de contraseña acepta una contraseña manual de al menos 8 caracteres o
 ## Reglas de calificación
 
 - Antes de votar, el cliente debe escanear el QR del local con la ubicación activada.
-- El escaneo se valida contra la ubicación del negocio y solo se habilita si el cliente está a menos de 150 metros.
+- El escaneo se valida contra la ubicación del negocio y solo se habilita si el cliente está dentro del radio configurado (15 metros por defecto, configurable desde `/admin/settings`).
 - Cada escaneo válido registra una visita con 2 votos disponibles y vence a las 24 horas.
 - Al usar los 2 votos o al vencer el plazo, la visita queda como histórica (`used` o `expired`).
 - Un mismo dispositivo solo puede puntuar una vez cada plato.

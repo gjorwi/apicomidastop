@@ -2,8 +2,9 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { connectDB } from './config/db.js';
-import { Category, User, Visit } from './models/index.js';
+import { AppConfig, Category, User, Visit } from './models/index.js';
 import { baseCategories } from './data/categories.js';
+import { DEFAULT_SCAN_RADIUS_METERS } from './utils/settings.js';
 
 async function bootstrap() {
   await connectDB();
@@ -12,7 +13,14 @@ async function bootstrap() {
     Category.syncIndexes(),
     User.syncIndexes(),
     Visit.syncIndexes(),
+    AppConfig.syncIndexes(),
   ]);
+
+  await AppConfig.updateOne(
+    { key: 'platform' },
+    { $setOnInsert: { scanRadiusMeters: DEFAULT_SCAN_RADIUS_METERS } },
+    { upsert: true },
+  );
 
   let createdCategories = 0;
   let updatedCategories = 0;

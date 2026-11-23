@@ -9,7 +9,8 @@ import {
   Visit,
 } from '../models/index.js';
 import { asyncHandler } from '../utils/async-handler.js';
-import { distanceInMeters, isValidCoordinates, SCAN_RADIUS_METERS } from '../utils/geo.js';
+import { distanceInMeters, isValidCoordinates } from '../utils/geo.js';
+import { getPlatformSettings } from '../utils/settings.js';
 import {
   buildCategoryRanking,
   computeBusinessMetrics,
@@ -253,10 +254,13 @@ router.post(
       });
     }
 
-    const business = await Business.findOne({
-      slug: req.params.slug,
-      status: 'approved',
-    }).lean();
+    const [business, settings] = await Promise.all([
+      Business.findOne({
+        slug: req.params.slug,
+        status: 'approved',
+      }).lean(),
+      getPlatformSettings(),
+    ]);
     if (!business) {
       return res.status(404).json({ message: 'Establecimiento no encontrado.' });
     }
@@ -267,12 +271,13 @@ router.post(
       });
     }
 
+    const scanRadiusMeters = settings.scanRadiusMeters;
     const distance = distanceInMeters(location, business.location);
-    if (distance === null || distance > SCAN_RADIUS_METERS) {
+    if (distance === null || distance > scanRadiusMeters) {
       return res.status(403).json({
-        message: `No pudimos confirmar tu visita: debes estar a menos de ${SCAN_RADIUS_METERS} m del local.`,
+        message: `No pudimos confirmar tu visita: debes estar a menos de ${scanRadiusMeters} m del local.`,
         distanceMeters: distance === null ? null : Math.round(distance),
-        radiusMeters: SCAN_RADIUS_METERS,
+        radiusMeters: scanRadiusMeters,
       });
     }
 
@@ -321,7 +326,7 @@ router.post(
     return res.status(created ? 201 : 200).json({
       verified: true,
       distanceMeters: Math.round(distance),
-      radiusMeters: SCAN_RADIUS_METERS,
+      radiusMeters: scanRadiusMeters,
       visit: serializeVisit(visit),
     });
   }),
@@ -337,10 +342,13 @@ router.get(
       });
     }
 
-    const business = await Business.findOne({
-      slug: req.params.slug,
-      status: 'approved',
-    }).lean();
+    const [business, settings] = await Promise.all([
+      Business.findOne({
+        slug: req.params.slug,
+        status: 'approved',
+      }).lean(),
+      getPlatformSettings(),
+    ]);
     if (!business) {
       return res.status(404).json({ message: 'Establecimiento no encontrado.' });
     }
@@ -356,7 +364,7 @@ router.get(
 
     return res.json({
       visit: visit ? serializeVisit(visit) : null,
-      radiusMeters: SCAN_RADIUS_METERS,
+      radiusMeters: settings.scanRadiusMeters,
     });
   }),
 );

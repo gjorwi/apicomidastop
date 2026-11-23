@@ -230,6 +230,15 @@ const PromotionSchema = new Schema(
   { timestamps: true },
 );
 
+const AppConfigSchema = new Schema(
+  {
+    key: { type: String, required: true, unique: true, trim: true },
+    scanRadiusMeters: { type: Number, default: 15, min: 1, max: 500 },
+    updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  },
+  { timestamps: true },
+);
+
 export const Category = models.Category || model('Category', CategorySchema);
 export const Business = models.Business || model('Business', BusinessSchema);
 export const Product = models.Product || model('Product', ProductSchema);
@@ -242,3 +251,5 @@ export const RankingSnapshot =
   models.RankingSnapshot || model('RankingSnapshot', RankingSnapshotSchema);
 export const Promotion =
   models.Promotion || model('Promotion', PromotionSchema);
+export const AppConfig =
+  models.AppConfig || model('AppConfig', AppConfigSchema);
