@@ -1,3 +1,5 @@
+import { getProductPrices, lowestPrice } from './prices.js';
+
 function formatDisplayName(value) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -87,6 +89,8 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
 }
 
 export function serializeProduct(product, business = null, metrics = {}) {
+  const prices = getProductPrices(product);
+
   return {
     id: String(product._id),
     _id: String(product._id),
@@ -101,7 +105,8 @@ export function serializeProduct(product, business = null, metrics = {}) {
     score: metrics.score ?? null,
     ratingsCount: metrics.ratingsCount ?? 0,
     totalRatings: metrics.totalRatings ?? 0,
-    price: product.price,
+    price: lowestPrice(prices) ?? product.price,
+    prices,
     description: product.description,
     emoji: product.emoji,
     image: product.image || '',

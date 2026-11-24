@@ -73,6 +73,12 @@ const ProductSchema = new Schema(
     name: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
     price: { type: Number, required: true, min: 0 },
+    prices: {
+      unique: { type: Number, default: null, min: 0 },
+      small: { type: Number, default: null, min: 0 },
+      medium: { type: Number, default: null, min: 0 },
+      large: { type: Number, default: null, min: 0 },
+    },
     emoji: { type: String, default: '🍽️' },
     image: { type: String, default: '' },
     isActive: { type: Boolean, default: true },

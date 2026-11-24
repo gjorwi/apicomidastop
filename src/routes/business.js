@@ -10,6 +10,10 @@ import {
   serializeBusiness,
   serializeProduct,
 } from '../utils/serializers.js';
+import {
+  MAX_PRODUCTS_PER_MENU,
+  validatePricesInput,
+} from '../utils/prices.js';
 
 const router = Router();
 
@@ -95,6 +99,9 @@ router.get(
         activeProducts: bundle.metrics.activeProducts,
         availableProducts: bundle.metrics.availableProducts,
         categories: bundle.metrics.categories,
+      },
+      limits: {
+        maxProducts: MAX_PRODUCTS_PER_MENU,
       },
     });
   }),
@@ -196,13 +203,47 @@ router.get(
 router.post(
   '/me/products',
   asyncHandler(async (req, res) => {
-    const { name, description, price, categoryKey, emoji, image } = req.body || {};
-    const numericPrice = Number(price);
-    if (!name || !categoryKey || !Number.isFinite(numericPrice) || numericPrice <= 0) {
+    const {
+      name,
+      description,
+      price,
+      categoryKey,
+      emoji,
+      image,
+      prices: pricesInput,
+    } = req.body || {};
+
+    if (!name || !categoryKey) {
       return res.status(400).json({
-        message: 'Nombre, categoría y precio válido son obligatorios.',
+        message: 'Nombre, categoría y al menos un precio son obligatorios.',
       });
     }
+
+    let prices;
+    let basePrice;
+    if (pricesInput !== undefined) {
+      const parsed = validatePricesInput(pricesInput);
+      if (parsed.error) {
+        return res.status(400).json({ message: parsed.error });
+      }
+      prices = parsed.prices;
+      basePrice = parsed.price;
+    } else {
+      const numericPrice = Number(price);
+      if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+        return res.status(400).json({
+          message: 'Indica al menos un precio mayor que cero.',
+        });
+      }
+      prices = {
+        unique: numericPrice,
+        small: null,
+        medium: null,
+        large: null,
+      };
+      basePrice = numericPrice;
+    }
+
     if (!isValidImage(image)) {
       return res.status(400).json({
         message: 'La imagen del plato debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
@@ -212,16 +253,31 @@ router.post(
     if (!category) {
       return res.status(400).json({ message: 'Categoría no válida.' });
     }
+
+    const isActive = req.body.isActive ?? true;
+    if (isActive) {
+      const activeCount = await Product.countDocuments({
+        business: req.business._id,
+        isActive: true,
+      });
+      if (activeCount >= MAX_PRODUCTS_PER_MENU) {
+        return res.status(400).json({
+          message: `Tu menú permite hasta ${MAX_PRODUCTS_PER_MENU} platos activos. Oculta o elimina uno antes de agregar otro.`,
+        });
+      }
+    }
+
     const product = await Product.create({
       business: req.business._id,
       categoryKey,
       name,
       description: description || '',
-      price: numericPrice,
+      price: basePrice,
+      prices,
       emoji: emoji || '🍽️',
       image: image || '',
       isAvailable: req.body.isAvailable ?? true,
-      isActive: req.body.isActive ?? true,
+      isActive,
     });
     res.status(201).json({ product: serializeProduct(product, req.business, {}) });
   }),
@@ -240,7 +296,6 @@ router.put(
     const allowed = [
       'name',
       'description',
-      'price',
       'categoryKey',
       'emoji',
       'image',
@@ -252,15 +307,39 @@ router.put(
         message: 'La imagen del plato debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
       });
     }
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) product[key] = req.body[key];
-    }
-    if (req.body.price !== undefined) {
+    if (req.body.prices !== undefined) {
+      const parsed = validatePricesInput(req.body.prices);
+      if (parsed.error) {
+        return res.status(400).json({ message: parsed.error });
+      }
+      product.prices = parsed.prices;
+      product.price = parsed.price;
+    } else if (req.body.price !== undefined) {
       const price = Number(req.body.price);
       if (!Number.isFinite(price) || price <= 0) {
         return res.status(400).json({ message: 'Precio no válido.' });
       }
       product.price = price;
+      product.prices = {
+        unique: price,
+        small: null,
+        medium: null,
+        large: null,
+      };
+    }
+    if (req.body.isActive === true && product.isActive !== true) {
+      const activeCount = await Product.countDocuments({
+        business: req.business._id,
+        isActive: true,
+      });
+      if (activeCount >= MAX_PRODUCTS_PER_MENU) {
+        return res.status(400).json({
+          message: `Tu menú permite hasta ${MAX_PRODUCTS_PER_MENU} platos activos. Oculta o elimina uno antes de activar otro.`,
+        });
+      }
+    }
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) product[key] = req.body[key];
     }
     await product.save();
     res.json({ product: serializeProduct(product, req.business, {}) });
