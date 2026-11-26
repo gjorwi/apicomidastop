@@ -2,7 +2,9 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
+  BUSINESS_EVENT_TYPES,
   Business,
+  BusinessEvent,
   BusinessRequest,
   Category,
   Product,
@@ -62,6 +64,7 @@ router.get(
       pendingBusinesses,
       pendingRequests,
       users,
+      clients,
       products,
       ratings,
       snapshots,
@@ -71,6 +74,7 @@ router.get(
       Business.countDocuments({ status: 'pending' }),
       BusinessRequest.countDocuments({ status: 'pending' }),
       User.countDocuments(),
+      User.countDocuments({ role: 'client' }),
       Product.countDocuments({ isActive: true }),
       Rating.countDocuments(),
       RankingSnapshot.countDocuments(),
@@ -83,6 +87,7 @@ router.get(
         pendingBusinesses,
         pendingRequests,
         users,
+        clients,
         products,
         ratings,
         snapshots,
@@ -313,6 +318,108 @@ router.patch(
       });
     }
     res.json({ business: serializeBusiness(business) });
+  }),
+);
+
+router.get(
+  '/businesses/:id/metrics',
+  asyncHandler(async (req, res) => {
+    if (!/^[a-f0-9]{24}$/i.test(req.params.id)) {
+      return res.status(404).json({ message: 'Negocio no encontrado.' });
+    }
+
+    const business = await Business.findById(req.params.id).lean();
+    if (!business) {
+      return res.status(404).json({ message: 'Negocio no encontrado.' });
+    }
+
+    const requestedRange = Number(req.query.range);
+    const range = [7, 30, 90].includes(requestedRange) ? requestedRange : 30;
+    const now = new Date();
+    const from = new Date(now.getTime() - (range - 1) * 24 * 60 * 60 * 1000);
+    from.setHours(0, 0, 0, 0);
+
+    const events = await BusinessEvent.find({
+      business: business._id,
+      createdAt: { $gte: from },
+    }).lean();
+
+    const totals = Object.fromEntries(
+      BUSINESS_EVENT_TYPES.map((type) => [type, 0]),
+    );
+    for (const event of events) {
+      if (totals[event.type] !== undefined) totals[event.type] += 1;
+    }
+
+    const dayKey = (date) =>
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Caracas',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(date);
+
+    const daily = [];
+    for (let index = range - 1; index >= 0; index -= 1) {
+      const date = new Date(now.getTime() - index * 24 * 60 * 60 * 1000);
+      daily.push({
+        date: dayKey(date),
+        ...Object.fromEntries(BUSINESS_EVENT_TYPES.map((type) => [type, 0])),
+      });
+    }
+    const dailyMap = new Map(daily.map((day) => [day.date, day]));
+    for (const event of events) {
+      const day = dailyMap.get(dayKey(new Date(event.createdAt)));
+      if (day && day[event.type] !== undefined) day[event.type] += 1;
+    }
+
+    const dishShareCounts = new Map();
+    for (const event of events) {
+      if (event.type === 'dish_share' && event.product) {
+        const key = String(event.product);
+        dishShareCounts.set(key, (dishShareCounts.get(key) || 0) + 1);
+      }
+    }
+    const topDishEntries = [...dishShareCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    const products = topDishEntries.length
+      ? await Product.find({
+          _id: { $in: topDishEntries.map(([productId]) => productId) },
+        })
+          .select('name emoji')
+          .lean()
+      : [];
+    const productMap = new Map(
+      products.map((product) => [String(product._id), product]),
+    );
+    const topSharedDishes = topDishEntries.map(([productId, shares]) => ({
+      productId,
+      name: productMap.get(productId)?.name || 'Plato',
+      emoji: productMap.get(productId)?.emoji || '🍽️',
+      shares,
+    }));
+
+    const category = await Category.findOne({
+      key: business.categoryKey,
+    }).lean();
+
+    res.json({
+      business: serializeBusiness(business, {}, category),
+      range: { days: range, from, to: now },
+      totals,
+      daily,
+      uniqueUsers: new Set(
+        events.filter((event) => event.user).map((event) => String(event.user)),
+      ).size,
+      uniqueDevices: new Set(
+        events
+          .filter((event) => event.deviceId)
+          .map((event) => event.deviceId),
+      ).size,
+      totalEvents: events.length,
+      topSharedDishes,
+    });
   }),
 );
 

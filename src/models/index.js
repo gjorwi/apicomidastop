@@ -104,6 +104,36 @@ RatingSchema.index(
   { unique: true },
 );
 
+RatingSchema.index(
+  { product: 1, user: 1, period: 1 },
+  { unique: true, partialFilterExpression: { user: { $ne: null } } },
+);
+
+export const BUSINESS_EVENT_TYPES = [
+  'call',
+  'whatsapp',
+  'directions',
+  'menu_view',
+  'business_view',
+  'business_share',
+  'dish_share',
+];
+
+const BusinessEventSchema = new Schema(
+  {
+    business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    product: { type: Schema.Types.ObjectId, ref: 'Product', default: null },
+    type: { type: String, enum: BUSINESS_EVENT_TYPES, required: true, index: true },
+    user: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    deviceId: { type: String, default: '', trim: true },
+    channel: { type: String, default: '', trim: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } },
+);
+
+BusinessEventSchema.index({ business: 1, type: 1, createdAt: -1 });
+BusinessEventSchema.index({ business: 1, createdAt: -1 });
+
 const VisitSchema = new Schema(
   {
     business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
@@ -135,10 +165,19 @@ const UserSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    passwordHash: { type: String, required: true },
+    passwordHash: { type: String, default: '' },
+    googleId: { type: String, default: null, unique: true, sparse: true },
+    avatar: { type: String, default: '' },
+    authProvider: {
+      type: String,
+      enum: ['password', 'google'],
+      default: 'password',
+    },
+    lastLoginAt: { type: Date, default: null },
+    favorites: { type: [String], default: [] },
     role: {
       type: String,
-      enum: ['admin', 'business'],
+      enum: ['admin', 'business', 'client'],
       required: true,
       index: true,
     },
@@ -249,6 +288,8 @@ export const Category = models.Category || model('Category', CategorySchema);
 export const Business = models.Business || model('Business', BusinessSchema);
 export const Product = models.Product || model('Product', ProductSchema);
 export const Rating = models.Rating || model('Rating', RatingSchema);
+export const BusinessEvent =
+  models.BusinessEvent || model('BusinessEvent', BusinessEventSchema);
 export const Visit = models.Visit || model('Visit', VisitSchema);
 export const User = models.User || model('User', UserSchema);
 export const BusinessRequest =

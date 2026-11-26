@@ -1,6 +1,9 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import {
+  BUSINESS_EVENT_TYPES,
   Business,
+  BusinessEvent,
   BusinessRequest,
   Category,
   Product,
@@ -8,6 +11,11 @@ import {
   Rating,
   Visit,
 } from '../models/index.js';
+import {
+  optionalAuth,
+  requireAuth,
+  requireRole,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { distanceInMeters, isValidCoordinates } from '../utils/geo.js';
 import { getPlatformSettings } from '../utils/settings.js';
@@ -31,6 +39,14 @@ const TERMS_VERSION = '2026-11';
 const MAX_COVER_LENGTH = 700_000;
 const VISIT_MAX_VOTES = 2;
 const VISIT_TTL_MS = 24 * 60 * 60 * 1000;
+
+const eventLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Demasiados eventos. Intenta de nuevo más tarde.' },
+});
 
 async function expireStaleVisits(businessId, deviceId) {
   await Visit.updateMany(
@@ -190,6 +206,69 @@ router.get(
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
     res.json({ businesses: items });
+  }),
+);
+
+router.post(
+  '/businesses/:slug/events',
+  eventLimiter,
+  optionalAuth,
+  asyncHandler(async (req, res) => {
+    const { type, productId, deviceId, channel } = req.body || {};
+
+    if (!BUSINESS_EVENT_TYPES.includes(type)) {
+      return res.status(400).json({ message: 'Tipo de evento no válido.' });
+    }
+    if (type === 'dish_share' && !productId) {
+      return res.status(400).json({ message: 'Falta el plato compartido.' });
+    }
+
+    const business = await Business.findOne({
+      slug: req.params.slug,
+      status: 'approved',
+    })
+      .select('_id')
+      .lean();
+    if (!business) {
+      return res.status(404).json({ message: 'Establecimiento no encontrado.' });
+    }
+
+    let product = null;
+    if (type === 'dish_share') {
+      if (!/^[a-f0-9]{24}$/i.test(String(productId))) {
+        return res.status(400).json({ message: 'El plato no es válido.' });
+      }
+      product = await Product.findOne({
+        _id: productId,
+        business: business._id,
+        isActive: true,
+      })
+        .select('_id')
+        .lean();
+      if (!product) {
+        return res.status(400).json({ message: 'El plato no pertenece al negocio.' });
+      }
+    }
+
+    if (req.user && req.user.role !== 'client') {
+      return res.status(204).end();
+    }
+
+    const normalizedDeviceId = String(deviceId || '').trim().slice(0, 120);
+    if (!req.user && !normalizedDeviceId) {
+      return res.status(400).json({ message: 'Falta identificar el dispositivo.' });
+    }
+
+    await BusinessEvent.create({
+      business: business._id,
+      product: product?._id || null,
+      type,
+      user: req.user?._id || null,
+      deviceId: normalizedDeviceId,
+      channel: String(channel || '').trim().slice(0, 40),
+    });
+
+    return res.status(201).json({ ok: true });
   }),
 );
 
@@ -507,6 +586,8 @@ router.get(
 
 router.post(
   '/ratings',
+  requireAuth,
+  requireRole('client'),
   asyncHandler(async (req, res) => {
     const { productId, deviceId, score, visitId } = req.body || {};
     const numericScore = Number(score);
@@ -543,7 +624,7 @@ router.post(
 
     const existingRating = await Rating.findOne({
       product: product._id,
-      deviceId: normalizedDeviceId,
+      $or: [{ user: req.user._id }, { deviceId: normalizedDeviceId }],
     }).lean();
     if (existingRating) {
       return res.status(409).json({
@@ -581,6 +662,7 @@ router.post(
       deviceId: normalizedDeviceId,
       period: getPeriod(),
       score: numericScore,
+      user: req.user._id,
     });
 
     const visit = await Visit.findOneAndUpdate(

@@ -123,6 +123,9 @@ export function serializeUser(user) {
     email: user.email,
     role: user.role,
     status: user.status,
+    avatar: user.avatar || '',
+    authProvider: user.authProvider || 'password',
+    lastLoginAt: user.lastLoginAt || null,
     business: user.business ? String(user.business) : null,
     createdAt: user.createdAt,
   };
