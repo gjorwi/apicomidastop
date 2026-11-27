@@ -2,11 +2,15 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
+  ACHIEVEMENT_REQUIREMENT_TYPES,
   BUSINESS_EVENT_TYPES,
+  Achievement,
   Business,
   BusinessEvent,
   BusinessRequest,
   Category,
+  Coupon,
+  CouponPurchase,
   Product,
   RankingSnapshot,
   Rating,
@@ -419,6 +423,310 @@ router.get(
       ).size,
       totalEvents: events.length,
       topSharedDishes,
+    });
+  }),
+);
+
+function serializeAdminCoupon(coupon, business, stats = {}) {
+  return {
+    id: String(coupon._id),
+    business: business
+      ? { id: String(business._id), slug: business.slug, name: business.name }
+      : null,
+    title: coupon.title,
+    description: coupon.description,
+    emoji: coupon.emoji || '🎁',
+    pointsCost: coupon.pointsCost,
+    stock: coupon.stock,
+    perUserLimit: coupon.perUserLimit,
+    availableFrom: coupon.availableFrom,
+    availableUntil: coupon.availableUntil,
+    validityDays: coupon.validityDays,
+    terms: coupon.terms,
+    status: coupon.status,
+    createdAt: coupon.createdAt,
+    stats,
+  };
+}
+
+async function adminCouponStats(couponId) {
+  const [acquired, activated, used, rejected, expired] = await Promise.all([
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'acquired' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'activated' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'used' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'rejected' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'expired' }),
+  ]);
+  return { acquired, activated, used, rejected, expired };
+}
+
+router.get(
+  '/achievements',
+  asyncHandler(async (_req, res) => {
+    const achievements = await Achievement.find({})
+      .sort({ order: 1, createdAt: 1 })
+      .lean();
+    res.json({
+      achievements: achievements.map((achievement) => ({
+        id: String(achievement._id),
+        code: achievement.code,
+        title: achievement.title,
+        description: achievement.description,
+        icon: achievement.icon,
+        requirementType: achievement.requirementType,
+        requirementValue: achievement.requirementValue,
+        rewardPoints: achievement.rewardPoints,
+        order: achievement.order,
+        isActive: achievement.isActive,
+      })),
+      requirementTypes: ACHIEVEMENT_REQUIREMENT_TYPES,
+    });
+  }),
+);
+
+router.post(
+  '/achievements',
+  asyncHandler(async (req, res) => {
+    const code = String(req.body?.code || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-');
+    const title = String(req.body?.title || '').trim();
+    const requirementType = String(req.body?.requirementType || '');
+    const requirementValue = Number(req.body?.requirementValue);
+    const rewardPoints = Number(req.body?.rewardPoints ?? 0);
+
+    if (!code || !title) {
+      return res.status(400).json({ message: 'Código y título son obligatorios.' });
+    }
+    if (!ACHIEVEMENT_REQUIREMENT_TYPES.includes(requirementType)) {
+      return res.status(400).json({ message: 'Tipo de requisito no válido.' });
+    }
+    if (!Number.isFinite(requirementValue) || requirementValue < 1) {
+      return res.status(400).json({ message: 'Valor del requisito no válido.' });
+    }
+    if (!Number.isFinite(rewardPoints) || rewardPoints < 0) {
+      return res.status(400).json({ message: 'Puntos de recompensa no válidos.' });
+    }
+
+    const achievement = await Achievement.create({
+      code,
+      title,
+      description: String(req.body?.description || '').trim(),
+      icon: String(req.body?.icon || '🏆').trim() || '🏆',
+      requirementType,
+      requirementValue,
+      rewardPoints,
+      order: Number(req.body?.order ?? 0),
+      isActive: req.body?.isActive !== false,
+    });
+
+    return res.status(201).json({
+      achievement: {
+        id: String(achievement._id),
+        ...achievement.toObject(),
+      },
+    });
+  }),
+);
+
+router.put(
+  '/achievements/:id',
+  asyncHandler(async (req, res) => {
+    const achievement = await Achievement.findById(req.params.id);
+    if (!achievement) {
+      return res.status(404).json({ message: 'Logro no encontrado.' });
+    }
+
+    const allowed = [
+      'title',
+      'description',
+      'icon',
+      'requirementType',
+      'requirementValue',
+      'rewardPoints',
+      'order',
+      'isActive',
+    ];
+    for (const key of allowed) {
+      if (req.body[key] === undefined) continue;
+      if (key === 'requirementType') {
+        if (!ACHIEVEMENT_REQUIREMENT_TYPES.includes(req.body[key])) {
+          return res.status(400).json({ message: 'Tipo de requisito no válido.' });
+        }
+        achievement[key] = req.body[key];
+      } else if (
+        ['requirementValue', 'rewardPoints', 'order'].includes(key)
+      ) {
+        const value = Number(req.body[key]);
+        if (!Number.isFinite(value) || value < 0) {
+          return res.status(400).json({ message: `Valor no válido para ${key}.` });
+        }
+        achievement[key] = value;
+      } else if (key === 'isActive') {
+        achievement.isActive = Boolean(req.body[key]);
+      } else {
+        achievement[key] = String(req.body[key] || '').trim();
+      }
+    }
+    if (req.body?.code !== undefined) {
+      achievement.code = String(req.body.code)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-');
+    }
+
+    await achievement.save();
+    return res.json({ achievement });
+  }),
+);
+
+router.get(
+  '/coupons',
+  asyncHandler(async (_req, res) => {
+    const [coupons, businesses] = await Promise.all([
+      Coupon.find({}).sort({ createdAt: -1 }).lean(),
+      Business.find({}).select('slug name').lean(),
+    ]);
+    const businessMap = new Map(
+      businesses.map((business) => [String(business._id), business]),
+    );
+    const items = await Promise.all(
+      coupons.map(async (coupon) =>
+        serializeAdminCoupon(
+          coupon,
+          businessMap.get(String(coupon.business)),
+          await adminCouponStats(coupon._id),
+        ),
+      ),
+    );
+    return res.json({ coupons: items });
+  }),
+);
+
+router.post(
+  '/coupons',
+  asyncHandler(async (req, res) => {
+    const business = await Business.findOne({
+      _id: req.body?.businessId,
+      status: 'approved',
+    }).lean();
+    if (!business) {
+      return res.status(400).json({ message: 'Selecciona un negocio aprobado.' });
+    }
+
+    const title = String(req.body?.title || '').trim();
+    const pointsCost = Number(req.body?.pointsCost);
+    const stock = Number(req.body?.stock);
+    const perUserLimit = Number(req.body?.perUserLimit ?? 1);
+    const validityDays = Number(req.body?.validityDays ?? 30);
+
+    if (!title || !Number.isFinite(pointsCost) || pointsCost <= 0) {
+      return res.status(400).json({
+        message: 'Título y costo en puntos válidos son obligatorios.',
+      });
+    }
+    if (!Number.isFinite(stock) || stock < 0) {
+      return res.status(400).json({ message: 'El stock no es válido.' });
+    }
+    if (!Number.isFinite(perUserLimit) || perUserLimit < 1) {
+      return res.status(400).json({ message: 'El límite por cliente no es válido.' });
+    }
+    if (!Number.isFinite(validityDays) || validityDays < 1) {
+      return res.status(400).json({ message: 'La validez no es válida.' });
+    }
+
+    const availableFrom = req.body?.availableFrom
+      ? new Date(req.body.availableFrom)
+      : null;
+    const availableUntil = req.body?.availableUntil
+      ? new Date(req.body.availableUntil)
+      : null;
+
+    const coupon = await Coupon.create({
+      business: business._id,
+      title,
+      description: String(req.body?.description || '').trim(),
+      emoji: String(req.body?.emoji || '🎁').trim() || '🎁',
+      pointsCost,
+      stock,
+      perUserLimit,
+      validityDays,
+      availableFrom,
+      availableUntil,
+      terms: String(req.body?.terms || '').trim(),
+      status: ['active', 'paused', 'ended'].includes(req.body?.status)
+        ? req.body.status
+        : 'active',
+      createdBy: req.user._id,
+    });
+
+    return res.status(201).json({
+      coupon: serializeAdminCoupon(
+        coupon,
+        business,
+        await adminCouponStats(coupon._id),
+      ),
+    });
+  }),
+);
+
+router.put(
+  '/coupons/:id',
+  asyncHandler(async (req, res) => {
+    const coupon = await Coupon.findById(req.params.id);
+    if (!coupon) {
+      return res.status(404).json({ message: 'Cupón no encontrado.' });
+    }
+
+    const allowed = [
+      'title',
+      'description',
+      'emoji',
+      'pointsCost',
+      'stock',
+      'perUserLimit',
+      'validityDays',
+      'terms',
+      'status',
+    ];
+    for (const key of allowed) {
+      if (req.body[key] === undefined) continue;
+      if (['pointsCost', 'stock', 'perUserLimit', 'validityDays'].includes(key)) {
+        const value = Number(req.body[key]);
+        if (!Number.isFinite(value) || value < (key === 'stock' ? 0 : 1)) {
+          return res.status(400).json({ message: `Valor no válido para ${key}.` });
+        }
+        coupon[key] = value;
+      } else if (key === 'status') {
+        if (['active', 'paused', 'ended'].includes(req.body[key])) {
+          coupon.status = req.body[key];
+        }
+      } else {
+        coupon[key] = String(req.body[key] || '').trim();
+      }
+    }
+    if (req.body?.availableFrom !== undefined) {
+      coupon.availableFrom = req.body.availableFrom
+        ? new Date(req.body.availableFrom)
+        : null;
+    }
+    if (req.body?.availableUntil !== undefined) {
+      coupon.availableUntil = req.body.availableUntil
+        ? new Date(req.body.availableUntil)
+        : null;
+    }
+
+    await coupon.save();
+    const business = await Business.findById(coupon.business)
+      .select('slug name')
+      .lean();
+    return res.json({
+      coupon: serializeAdminCoupon(
+        coupon,
+        business,
+        await adminCouponStats(coupon._id),
+      ),
     });
   }),
 );

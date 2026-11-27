@@ -1,5 +1,14 @@
 import { Router } from 'express';
-import { Business, Category, Product, Rating } from '../models/index.js';
+import {
+  Business,
+  Category,
+  Coupon,
+  CouponPurchase,
+  PointTransaction,
+  Product,
+  Rating,
+  User,
+} from '../models/index.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import {
@@ -10,6 +19,7 @@ import {
   serializeBusiness,
   serializeProduct,
 } from '../utils/serializers.js';
+import { evaluateAchievements } from '../utils/loyalty.js';
 import {
   MAX_PRODUCTS_PER_MENU,
   validatePricesInput,
@@ -366,6 +376,286 @@ router.get(
   asyncHandler(async (req, res) => {
     const bundle = await businessBundle(req.business);
     res.json({ metrics: bundle.metrics });
+  }),
+);
+
+function serializeBusinessCoupon(coupon, stats = {}) {
+  return {
+    id: String(coupon._id),
+    title: coupon.title,
+    description: coupon.description,
+    emoji: coupon.emoji || '🎁',
+    pointsCost: coupon.pointsCost,
+    stock: coupon.stock,
+    perUserLimit: coupon.perUserLimit,
+    availableFrom: coupon.availableFrom,
+    availableUntil: coupon.availableUntil,
+    validityDays: coupon.validityDays,
+    terms: coupon.terms,
+    status: coupon.status,
+    createdAt: coupon.createdAt,
+    stats,
+  };
+}
+
+async function couponStats(couponId) {
+  const [acquired, activated, used, rejected, expired] = await Promise.all([
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'acquired' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'activated' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'used' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'rejected' }),
+    CouponPurchase.countDocuments({ coupon: couponId, status: 'expired' }),
+  ]);
+  return { acquired, activated, used, rejected, expired };
+}
+
+function parseCouponDate(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+router.get(
+  '/me/coupons',
+  asyncHandler(async (req, res) => {
+    const coupons = await Coupon.find({ business: req.business._id })
+      .sort({ createdAt: -1 })
+      .lean();
+    const items = await Promise.all(
+      coupons.map(async (coupon) =>
+        serializeBusinessCoupon(coupon, await couponStats(coupon._id)),
+      ),
+    );
+    return res.json({ coupons: items });
+  }),
+);
+
+router.post(
+  '/me/coupons',
+  asyncHandler(async (req, res) => {
+    const title = String(req.body?.title || '').trim();
+    const pointsCost = Number(req.body?.pointsCost);
+    const stock = Number(req.body?.stock);
+    const perUserLimit = Number(req.body?.perUserLimit ?? 1);
+    const validityDays = Number(req.body?.validityDays ?? 30);
+    const availableFrom = parseCouponDate(req.body?.availableFrom);
+    const availableUntil = parseCouponDate(req.body?.availableUntil);
+
+    if (!title || !Number.isFinite(pointsCost) || pointsCost <= 0) {
+      return res.status(400).json({
+        message: 'Título y costo en puntos válidos son obligatorios.',
+      });
+    }
+    if (!Number.isFinite(stock) || stock < 0) {
+      return res.status(400).json({ message: 'El stock no es válido.' });
+    }
+    if (!Number.isFinite(perUserLimit) || perUserLimit < 1) {
+      return res.status(400).json({ message: 'El límite por cliente no es válido.' });
+    }
+    if (!Number.isFinite(validityDays) || validityDays < 1) {
+      return res.status(400).json({ message: 'La validez no es válida.' });
+    }
+    if (availableFrom && availableUntil && availableFrom > availableUntil) {
+      return res.status(400).json({
+        message: 'La fecha de inicio no puede ser posterior a la de fin.',
+      });
+    }
+
+    const coupon = await Coupon.create({
+      business: req.business._id,
+      title,
+      description: String(req.body?.description || '').trim(),
+      emoji: String(req.body?.emoji || '🎁').trim() || '🎁',
+      pointsCost,
+      stock,
+      perUserLimit,
+      validityDays,
+      availableFrom: availableFrom ?? null,
+      availableUntil: availableUntil ?? null,
+      terms: String(req.body?.terms || '').trim(),
+      status: ['active', 'paused'].includes(req.body?.status)
+        ? req.body.status
+        : 'active',
+      createdBy: req.user._id,
+    });
+
+    return res.status(201).json({
+      coupon: serializeBusinessCoupon(coupon, await couponStats(coupon._id)),
+    });
+  }),
+);
+
+router.put(
+  '/me/coupons/:id',
+  asyncHandler(async (req, res) => {
+    const coupon = await Coupon.findOne({
+      _id: req.params.id,
+      business: req.business._id,
+    });
+    if (!coupon) {
+      return res.status(404).json({ message: 'Cupón no encontrado.' });
+    }
+
+    const allowed = [
+      'title',
+      'description',
+      'emoji',
+      'pointsCost',
+      'stock',
+      'perUserLimit',
+      'validityDays',
+      'terms',
+      'status',
+    ];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        if (['pointsCost', 'stock', 'perUserLimit', 'validityDays'].includes(key)) {
+          const value = Number(req.body[key]);
+          if (!Number.isFinite(value) || value < (key === 'stock' ? 0 : 1)) {
+            return res.status(400).json({ message: `Valor no válido para ${key}.` });
+          }
+          coupon[key] = value;
+        } else if (key === 'status') {
+          if (['active', 'paused', 'ended'].includes(req.body[key])) {
+            coupon.status = req.body[key];
+          }
+        } else {
+          coupon[key] = String(req.body[key] || '').trim();
+        }
+      }
+    }
+
+    const availableFrom = parseCouponDate(req.body?.availableFrom);
+    const availableUntil = parseCouponDate(req.body?.availableUntil);
+    if (availableFrom !== undefined) coupon.availableFrom = availableFrom;
+    if (availableUntil !== undefined) coupon.availableUntil = availableUntil;
+
+    await coupon.save();
+    return res.json({
+      coupon: serializeBusinessCoupon(coupon, await couponStats(coupon._id)),
+    });
+  }),
+);
+
+router.get(
+  '/me/coupon-purchases',
+  asyncHandler(async (req, res) => {
+    const status = String(req.query.status || 'activated');
+    const filter = { business: req.business._id };
+    if (status !== 'todas') filter.status = status;
+
+    const purchases = await CouponPurchase.find(filter)
+      .sort({ activatedAt: -1, acquiredAt: -1 })
+      .lean();
+    const userIds = [...new Set(purchases.map((purchase) => String(purchase.user)))];
+    const users = userIds.length
+      ? await User.find({ _id: { $in: userIds } })
+          .select('name email avatar')
+          .lean()
+      : [];
+    const userMap = new Map(users.map((user) => [String(user._id), user]));
+
+    return res.json({
+      purchases: purchases.map((purchase) => {
+        const user = userMap.get(String(purchase.user));
+        return {
+          id: String(purchase._id),
+          status: purchase.status,
+          pointsSpent: purchase.pointsSpent,
+          acquiredAt: purchase.acquiredAt,
+          activatedAt: purchase.activatedAt,
+          acceptedAt: purchase.acceptedAt,
+          rejectedAt: purchase.rejectedAt,
+          expiresAt: purchase.expiresAt,
+          activationDistanceMeters:
+            purchase.activationLocation?.distanceMeters ?? null,
+          coupon: {
+            title: purchase.snapshot?.title || '',
+            description: purchase.snapshot?.description || '',
+            emoji: purchase.snapshot?.emoji || '🎁',
+          },
+          client: {
+            name: user?.name || 'Cliente',
+            email: user?.email || '',
+            avatar: user?.avatar || '',
+          },
+        };
+      }),
+    });
+  }),
+);
+
+router.post(
+  '/me/coupon-purchases/:id/accept',
+  asyncHandler(async (req, res) => {
+    const purchase = await CouponPurchase.findOne({
+      _id: req.params.id,
+      business: req.business._id,
+      status: 'activated',
+    });
+    if (!purchase) {
+      return res.status(404).json({ message: 'Canje activado no encontrado.' });
+    }
+
+    purchase.status = 'used';
+    purchase.acceptedAt = new Date();
+    purchase.acceptedBy = req.user._id;
+    await purchase.save();
+    const achievementsUnlocked = await evaluateAchievements(purchase.user);
+
+    return res.json({
+      purchase: {
+        id: String(purchase._id),
+        status: purchase.status,
+        acceptedAt: purchase.acceptedAt,
+      },
+      achievementsUnlocked,
+    });
+  }),
+);
+
+router.post(
+  '/me/coupon-purchases/:id/reject',
+  asyncHandler(async (req, res) => {
+    const purchase = await CouponPurchase.findOne({
+      _id: req.params.id,
+      business: req.business._id,
+      status: 'activated',
+    });
+    if (!purchase) {
+      return res.status(404).json({ message: 'Canje activado no encontrado.' });
+    }
+
+    purchase.status = 'rejected';
+    purchase.rejectedAt = new Date();
+    purchase.rejectedBy = req.user._id;
+    await purchase.save();
+
+    try {
+      await PointTransaction.create({
+        user: purchase.user,
+        business: purchase.business,
+        purchase: purchase._id,
+        type: 'coupon_refund',
+        amount: purchase.pointsSpent,
+        description: `Cupón rechazado: ${purchase.snapshot?.title || ''}`,
+      });
+      await User.updateOne(
+        { _id: purchase.user },
+        { $inc: { points: purchase.pointsSpent } },
+      );
+    } catch (refundError) {
+      if (refundError?.code !== 11000) throw refundError;
+    }
+
+    return res.json({
+      purchase: {
+        id: String(purchase._id),
+        status: purchase.status,
+        rejectedAt: purchase.rejectedAt,
+      },
+    });
   }),
 );
 

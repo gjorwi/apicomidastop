@@ -126,6 +126,7 @@ export function serializeUser(user) {
     avatar: user.avatar || '',
     authProvider: user.authProvider || 'password',
     lastLoginAt: user.lastLoginAt || null,
+    points: user.points || 0,
     business: user.business ? String(user.business) : null,
     createdAt: user.createdAt,
   };

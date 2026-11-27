@@ -6,8 +6,9 @@ import mongoose from 'mongoose';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { connectDB } from './config/db.js';
-import { Visit } from './models/index.js';
+import { Coupon, CouponPurchase, User, Visit } from './models/index.js';
 import authRoutes from './routes/auth.js';
+import clientRoutes from './routes/client.js';
 import publicRoutes from './routes/public.js';
 import businessRoutes from './routes/business.js';
 import adminRoutes from './routes/admin.js';
@@ -67,6 +68,7 @@ app.use('/api/auth', writeLimiter, authRoutes);
 app.use('/api/ratings', writeLimiter);
 app.use('/api/businesses/:slug/scan', writeLimiter);
 app.use('/api/business-requests', writeLimiter);
+app.use('/api/client', clientRoutes);
 app.use('/api', publicRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/admin', adminRoutes);
@@ -90,6 +92,15 @@ app.use((error, _req, res, _next) => {
 async function start() {
   await connectDB();
 
+  // El índice único sparse de Google no admite varios documentos con
+  // googleId: null. Los usuarios sin Google deben tener el campo ausente.
+  await User.updateMany(
+    { googleId: null },
+    { $unset: { googleId: '' } },
+  ).catch((error) => {
+    console.error('No se pudo limpiar googleId nulo:', error.message);
+  });
+
   const expireVisits = () =>
     Visit.updateMany(
       { status: 'active', expiresAt: { $lte: new Date() } },
@@ -98,8 +109,30 @@ async function start() {
       console.error('No se pudieron expirar las visitas:', error.message);
     });
 
-  await expireVisits();
-  const expiryTimer = setInterval(expireVisits, 5 * 60 * 1000);
+  const expireCoupons = async () => {
+    const now = new Date();
+    await Promise.all([
+      CouponPurchase.updateMany(
+        { status: 'acquired', expiresAt: { $lte: now } },
+        { $set: { status: 'expired' } },
+      ),
+      Coupon.updateMany(
+        {
+          status: 'active',
+          availableUntil: { $ne: null, $lte: now },
+        },
+        { $set: { status: 'ended' } },
+      ),
+    ]);
+  };
+
+  await Promise.all([expireVisits(), expireCoupons()]);
+  const expiryTimer = setInterval(() => {
+    expireVisits();
+    expireCoupons().catch((error) => {
+      console.error('No se pudieron expirar los cupones:', error.message);
+    });
+  }, 5 * 60 * 1000);
   expiryTimer.unref?.();
 
   app.listen(port, () => {

@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
-import { Business, User } from '../models/index.js';
+import { Business, User, Visit } from '../models/index.js';
 import { requireAuth, requireRole, signToken } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/async-handler.js';
+import { awardWelcomePoints } from '../utils/loyalty.js';
 import { serializeUser } from '../utils/serializers.js';
 
 const router = Router();
@@ -142,12 +143,79 @@ router.post(
         status: 'active',
         lastLoginAt: new Date(),
       });
+      const creditedUser = await awardWelcomePoints(user._id);
+      if (creditedUser) user = creditedUser;
     }
 
     return res.json({
       token: signToken(user),
       user: { ...serializeUser(user), favorites: user.favorites || [] },
       business: null,
+    });
+  }),
+);
+
+router.get(
+  '/me/pending-votes',
+  requireAuth,
+  requireRole('client'),
+  asyncHandler(async (req, res) => {
+    const deviceId = String(req.query.deviceId || '').trim().slice(0, 120);
+    const now = new Date();
+    const filters = [{ user: req.user._id }];
+    if (deviceId) filters.push({ deviceId, user: null });
+
+    const visits = await Visit.find({
+      status: 'active',
+      expiresAt: { $gt: now },
+      $or: filters,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const pending = visits.filter(
+      (visit) =>
+        (visit.votesUsed ?? 0) < (visit.maxVotes ?? 2),
+    );
+    if (!pending.length) {
+      return res.json({ pending: null, pendingCount: 0 });
+    }
+
+    const orphanIds = pending
+      .filter((visit) => !visit.user && deviceId && visit.deviceId === deviceId)
+      .map((visit) => visit._id);
+    if (orphanIds.length) {
+      await Visit.updateMany(
+        { _id: { $in: orphanIds } },
+        { $set: { user: req.user._id } },
+      );
+    }
+
+    const latest = pending[0];
+    const business = await Business.findOne({
+      _id: latest.business,
+      status: 'approved',
+    })
+      .select('name slug emoji')
+      .lean();
+    if (!business) {
+      return res.json({ pending: null, pendingCount: 0 });
+    }
+
+    const maxVotes = latest.maxVotes ?? 2;
+    const votesUsed = latest.votesUsed ?? 0;
+    return res.json({
+      pending: {
+        businessId: business.slug,
+        businessName: business.name,
+        businessEmoji: business.emoji || '🍽️',
+        visitId: String(latest._id),
+        votesRemaining: Math.max(0, maxVotes - votesUsed),
+        maxVotes,
+        votesUsed,
+        expiresAt: latest.expiresAt,
+      },
+      pendingCount: pending.length,
     });
   }),
 );

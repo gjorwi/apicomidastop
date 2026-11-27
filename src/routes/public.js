@@ -6,9 +6,11 @@ import {
   BusinessEvent,
   BusinessRequest,
   Category,
+  PointTransaction,
   Product,
   Promotion,
   Rating,
+  User,
   Visit,
 } from '../models/index.js';
 import {
@@ -17,6 +19,11 @@ import {
   requireRole,
 } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/async-handler.js';
+import {
+  awardRatingPoints,
+  evaluateAchievements,
+  getCaracasDayBounds,
+} from '../utils/loyalty.js';
 import { distanceInMeters, isValidCoordinates } from '../utils/geo.js';
 import { getPlatformSettings } from '../utils/settings.js';
 import {
@@ -318,6 +325,7 @@ router.get(
 
 router.post(
   '/businesses/:slug/scan',
+  optionalAuth,
   asyncHandler(async (req, res) => {
     const deviceId = String(req.body?.deviceId || '').trim();
     const location = req.body?.location;
@@ -363,46 +371,61 @@ router.post(
     await expireStaleVisits(business._id, deviceId);
 
     const now = new Date();
-    let created = false;
-    let visit = await Visit.findOne({
+    const activeFilter = {
       business: business._id,
-      deviceId,
       status: 'active',
       expiresAt: { $gt: now },
-    });
-
-    if (!visit) {
-      try {
-        visit = await Visit.create({
-          business: business._id,
-          deviceId,
-          lat: location.lat,
-          lng: location.lng,
-          distanceMeters: Math.round(distance),
-          status: 'active',
-          votesUsed: 0,
-          maxVotes: VISIT_MAX_VOTES,
-          expiresAt: new Date(now.getTime() + VISIT_TTL_MS),
-        });
-        created = true;
-      } catch (error) {
-        if (error?.code !== 11000) throw error;
-        visit = await Visit.findOne({
-          business: business._id,
-          deviceId,
-          status: 'active',
-          expiresAt: { $gt: now },
-        });
-      }
+    };
+    if (req.user) {
+      activeFilter.$or = [{ user: req.user._id }, { deviceId }];
+    } else {
+      activeFilter.deviceId = deviceId;
     }
 
-    if (!visit) {
+    const existingVisit = await Visit.findOne(activeFilter).sort({
+      createdAt: -1,
+    });
+    if (existingVisit) {
+      const votesRemaining = Math.max(
+        0,
+        (existingVisit.maxVotes ?? VISIT_MAX_VOTES) -
+          (existingVisit.votesUsed ?? 0),
+      );
       return res.status(409).json({
-        message: 'No pudimos registrar el escaneo. Intenta de nuevo.',
+        code: 'ACTIVE_VISIT',
+        message:
+          votesRemaining > 0
+            ? `Ya tienes una visita activa en este local y te quedan ${votesRemaining} votos. Usa el botón de votación pendiente para puntuar.`
+            : 'Ya usaste los votos de tu visita a este local. Podrás volver a escanear cuando venza la visita de 24 horas.',
+        visit: serializeVisit(existingVisit),
+        votesRemaining,
       });
     }
 
-    return res.status(created ? 201 : 200).json({
+    let visit;
+    try {
+      visit = await Visit.create({
+        business: business._id,
+        user: req.user?._id || null,
+        deviceId,
+        lat: location.lat,
+        lng: location.lng,
+        distanceMeters: Math.round(distance),
+        status: 'active',
+        votesUsed: 0,
+        maxVotes: VISIT_MAX_VOTES,
+        expiresAt: new Date(now.getTime() + VISIT_TTL_MS),
+      });
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      return res.status(409).json({
+        code: 'ACTIVE_VISIT',
+        message:
+          'Ya tienes una visita activa en este local. Usa el botón de votación pendiente o espera a que venza.',
+      });
+    }
+
+    return res.status(201).json({
       verified: true,
       distanceMeters: Math.round(distance),
       radiusMeters: scanRadiusMeters,
@@ -413,6 +436,7 @@ router.post(
 
 router.get(
   '/businesses/:slug/scan',
+  optionalAuth,
   asyncHandler(async (req, res) => {
     const deviceId = String(req.query.deviceId || '').trim();
     if (!deviceId) {
@@ -434,12 +458,18 @@ router.get(
 
     await expireStaleVisits(business._id, deviceId);
 
-    const visit = await Visit.findOne({
+    const filter = {
       business: business._id,
-      deviceId,
       status: 'active',
       expiresAt: { $gt: new Date() },
-    }).sort({ createdAt: -1 });
+    };
+    if (req.user) {
+      filter.$or = [{ user: req.user._id }, { deviceId }];
+    } else {
+      filter.deviceId = deviceId;
+    }
+
+    const visit = await Visit.findOne(filter).sort({ createdAt: -1 });
 
     return res.json({
       visit: visit ? serializeVisit(visit) : null,
@@ -628,17 +658,39 @@ router.post(
     }).lean();
     if (existingRating) {
       return res.status(409).json({
-        message: 'Ya puntuaste este plato con este dispositivo. Cada plato admite un solo voto.',
+        message:
+          'Ya puntuaste este plato con este dispositivo o con tu cuenta. Cada plato admite un solo voto.',
       });
     }
+
+    const { start: dayStart, end: dayEnd } = getCaracasDayBounds();
+    const businessesToday = await Rating.distinct('business', {
+      user: req.user._id,
+      createdAt: { $gte: dayStart, $lt: dayEnd },
+    });
+    const alreadyRatedThisBusiness = businessesToday.some(
+      (businessId) => String(businessId) === String(business._id),
+    );
+    if (!alreadyRatedThisBusiness && businessesToday.length >= 2) {
+      return res.status(409).json({
+        message:
+          'Solo puedes puntuar 2 negocios distintos por día. Vuelve mañana para puntuar otro local.',
+      });
+    }
+
+    const firstBusinessRating = !(await PointTransaction.exists({
+      user: req.user._id,
+      business: business._id,
+      type: 'rating_first_business',
+    }));
 
     await expireStaleVisits(business._id, normalizedDeviceId);
 
     const visitFilter = {
       business: business._id,
-      deviceId: normalizedDeviceId,
       status: 'active',
       expiresAt: { $gt: now },
+      $or: [{ user: req.user._id }, { deviceId: normalizedDeviceId }],
     };
     if (normalizedVisitId) visitFilter._id = normalizedVisitId;
 
@@ -689,6 +741,26 @@ router.post(
       await visit.save();
     }
 
+    let pointsEarned = 0;
+    let pointsBalance = 0;
+    let achievementsUnlocked = [];
+    try {
+      const pointsResult = await awardRatingPoints({
+        userId: req.user._id,
+        businessId: business._id,
+        ratingId: rating._id,
+        firstBusinessRating,
+      });
+      pointsEarned = pointsResult.pointsEarned;
+      achievementsUnlocked = await evaluateAchievements(req.user._id);
+      const updatedUser = await User.findById(req.user._id)
+        .select('points')
+        .lean();
+      pointsBalance = updatedUser?.points || 0;
+    } catch (loyaltyError) {
+      console.error('No se pudieron registrar los puntos:', loyaltyError.message);
+    }
+
     const [category, ratings] = await Promise.all([
       Category.findOne({ key: product.categoryKey }).lean(),
       Rating.find({ product: product._id }).lean(),
@@ -708,6 +780,9 @@ router.post(
       },
       visit: serializeVisit(visit),
       product: serializeProduct(product, business, metrics),
+      pointsEarned,
+      pointsBalance,
+      achievementsUnlocked,
     });
   }),
 );

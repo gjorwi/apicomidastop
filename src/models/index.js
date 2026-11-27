@@ -134,9 +134,169 @@ const BusinessEventSchema = new Schema(
 BusinessEventSchema.index({ business: 1, type: 1, createdAt: -1 });
 BusinessEventSchema.index({ business: 1, createdAt: -1 });
 
+export const ACHIEVEMENT_REQUIREMENT_TYPES = [
+  'ratings_count',
+  'categories_count',
+  'businesses_count',
+  'active_days',
+  'coupons_acquired',
+  'coupons_used',
+];
+
+const AchievementSchema = new Schema(
+  {
+    code: { type: String, required: true, unique: true, trim: true },
+    title: { type: String, required: true, trim: true },
+    description: { type: String, default: '' },
+    icon: { type: String, default: '🏆' },
+    requirementType: {
+      type: String,
+      enum: ACHIEVEMENT_REQUIREMENT_TYPES,
+      required: true,
+    },
+    requirementValue: { type: Number, required: true, min: 1 },
+    rewardPoints: { type: Number, default: 0, min: 0 },
+    order: { type: Number, default: 0 },
+    isActive: { type: Boolean, default: true, index: true },
+  },
+  { timestamps: true },
+);
+
+const UserAchievementSchema = new Schema(
+  {
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    achievement: {
+      type: Schema.Types.ObjectId,
+      ref: 'Achievement',
+      required: true,
+      index: true,
+    },
+    progress: { type: Number, default: 0, min: 0 },
+    unlockedAt: { type: Date, default: null },
+    rewardGrantedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+UserAchievementSchema.index({ user: 1, achievement: 1 }, { unique: true });
+
+const CouponSchema = new Schema(
+  {
+    business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    title: { type: String, required: true, trim: true },
+    description: { type: String, default: '' },
+    emoji: { type: String, default: '🎁' },
+    pointsCost: { type: Number, required: true, min: 1 },
+    stock: { type: Number, default: 0, min: 0 },
+    perUserLimit: { type: Number, default: 1, min: 1 },
+    availableFrom: { type: Date, default: null },
+    availableUntil: { type: Date, default: null },
+    validityDays: { type: Number, default: 30, min: 1 },
+    terms: { type: String, default: '' },
+    status: {
+      type: String,
+      enum: ['active', 'paused', 'ended'],
+      default: 'active',
+      index: true,
+    },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  },
+  { timestamps: true },
+);
+
+CouponSchema.index({ business: 1, status: 1 });
+
+const CouponPurchaseSchema = new Schema(
+  {
+    coupon: { type: Schema.Types.ObjectId, ref: 'Coupon', required: true, index: true },
+    business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    pointsSpent: { type: Number, required: true, min: 1 },
+    status: {
+      type: String,
+      enum: ['acquired', 'activated', 'used', 'expired', 'rejected'],
+      default: 'acquired',
+      index: true,
+    },
+    acquiredAt: { type: Date, default: Date.now },
+    activatedAt: { type: Date, default: null },
+    acceptedAt: { type: Date, default: null },
+    rejectedAt: { type: Date, default: null },
+    acceptedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    rejectedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    expiresAt: { type: Date, required: true, index: true },
+    activationLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      distanceMeters: { type: Number, default: null },
+    },
+    snapshot: {
+      title: { type: String, default: '' },
+      description: { type: String, default: '' },
+      emoji: { type: String, default: '🎁' },
+      validityDays: { type: Number, default: 30 },
+    },
+  },
+  { timestamps: true },
+);
+
+CouponPurchaseSchema.index({ user: 1, status: 1 });
+CouponPurchaseSchema.index({ business: 1, status: 1, activatedAt: -1 });
+CouponPurchaseSchema.index({ coupon: 1, user: 1, status: 1 });
+
+const PointTransactionSchema = new Schema(
+  {
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    business: { type: Schema.Types.ObjectId, ref: 'Business', default: null },
+    rating: { type: Schema.Types.ObjectId, ref: 'Rating', default: null },
+    achievement: { type: Schema.Types.ObjectId, ref: 'Achievement', default: null },
+    purchase: { type: Schema.Types.ObjectId, ref: 'CouponPurchase', default: null },
+    type: {
+      type: String,
+      enum: [
+        'welcome',
+        'rating',
+        'rating_first_business',
+        'achievement',
+        'coupon_acquire',
+        'coupon_refund',
+        'adjustment',
+      ],
+      required: true,
+      index: true,
+    },
+    amount: { type: Number, required: true },
+    description: { type: String, default: '' },
+  },
+  { timestamps: true },
+);
+
+PointTransactionSchema.index({ user: 1, createdAt: -1 });
+PointTransactionSchema.index(
+  { rating: 1 },
+  { unique: true, partialFilterExpression: { rating: { $ne: null } } },
+);
+PointTransactionSchema.index(
+  { user: 1, achievement: 1 },
+  { unique: true, partialFilterExpression: { achievement: { $ne: null } } },
+);
+PointTransactionSchema.index(
+  { purchase: 1, type: 1 },
+  { unique: true, partialFilterExpression: { purchase: { $ne: null } } },
+);
+PointTransactionSchema.index(
+  { user: 1, type: 1 },
+  { unique: true, partialFilterExpression: { type: 'welcome' } },
+);
+PointTransactionSchema.index(
+  { user: 1, business: 1, type: 1 },
+  { unique: true, partialFilterExpression: { type: 'rating_first_business' } },
+);
+
 const VisitSchema = new Schema(
   {
     business: { type: Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    user: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     deviceId: { type: String, required: true, trim: true },
     lat: { type: Number, default: null },
     lng: { type: Number, default: null },
@@ -156,9 +316,17 @@ const VisitSchema = new Schema(
 
 VisitSchema.index({ business: 1, deviceId: 1, status: 1 });
 VisitSchema.index({ business: 1, deviceId: 1, createdAt: -1 });
+VisitSchema.index({ user: 1, status: 1, expiresAt: 1 });
 VisitSchema.index(
   { business: 1, deviceId: 1 },
   { unique: true, partialFilterExpression: { status: 'active' } },
+);
+VisitSchema.index(
+  { business: 1, user: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'active', user: { $ne: null } },
+  },
 );
 
 const UserSchema = new Schema(
@@ -166,7 +334,7 @@ const UserSchema = new Schema(
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, default: '' },
-    googleId: { type: String, default: null, unique: true, sparse: true },
+    googleId: { type: String, unique: true, sparse: true },
     avatar: { type: String, default: '' },
     authProvider: {
       type: String,
@@ -175,6 +343,7 @@ const UserSchema = new Schema(
     },
     lastLoginAt: { type: Date, default: null },
     favorites: { type: [String], default: [] },
+    points: { type: Number, default: 0, min: 0 },
     role: {
       type: String,
       enum: ['admin', 'business', 'client'],
@@ -290,6 +459,15 @@ export const Product = models.Product || model('Product', ProductSchema);
 export const Rating = models.Rating || model('Rating', RatingSchema);
 export const BusinessEvent =
   models.BusinessEvent || model('BusinessEvent', BusinessEventSchema);
+export const Achievement =
+  models.Achievement || model('Achievement', AchievementSchema);
+export const UserAchievement =
+  models.UserAchievement || model('UserAchievement', UserAchievementSchema);
+export const Coupon = models.Coupon || model('Coupon', CouponSchema);
+export const CouponPurchase =
+  models.CouponPurchase || model('CouponPurchase', CouponPurchaseSchema);
+export const PointTransaction =
+  models.PointTransaction || model('PointTransaction', PointTransactionSchema);
 export const Visit = models.Visit || model('Visit', VisitSchema);
 export const User = models.User || model('User', UserSchema);
 export const BusinessRequest =
