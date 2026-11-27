@@ -167,6 +167,7 @@ router.get(
 
     const visits = await Visit.find({
       status: 'active',
+      closedAt: null,
       expiresAt: { $gt: now },
       $or: filters,
     })

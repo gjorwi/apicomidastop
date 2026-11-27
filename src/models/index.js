@@ -309,6 +309,7 @@ const VisitSchema = new Schema(
     },
     votesUsed: { type: Number, default: 0, min: 0 },
     maxVotes: { type: Number, default: 2, min: 1 },
+    closedAt: { type: Date, default: null },
     expiresAt: { type: Date, required: true, index: true },
   },
   { timestamps: true },

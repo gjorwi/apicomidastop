@@ -135,13 +135,15 @@ export function serializeUser(user) {
 export function serializeVisit(visit) {
   const maxVotes = visit.maxVotes ?? 2;
   const votesUsed = visit.votesUsed ?? 0;
+  const closed = Boolean(visit.closedAt);
   return {
     id: String(visit._id),
     businessId: String(visit.business),
     status: visit.status,
     votesUsed,
     maxVotes,
-    votesRemaining: Math.max(0, maxVotes - votesUsed),
+    votesRemaining: closed ? 0 : Math.max(0, maxVotes - votesUsed),
+    closedAt: visit.closedAt || null,
     expiresAt: visit.expiresAt,
     createdAt: visit.createdAt,
   };

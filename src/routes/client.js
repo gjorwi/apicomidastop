@@ -5,6 +5,7 @@ import {
   CouponPurchase,
   PointTransaction,
   User,
+  Visit,
 } from '../models/index.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -19,6 +20,43 @@ import { getPlatformSettings } from '../utils/settings.js';
 const router = Router();
 
 router.use(requireAuth, requireRole('client'));
+
+// Cierra la votación pendiente sin borrar la visita: la visita sigue activa
+// para evitar que se pueda volver a escanear el mismo local durante 24 h.
+router.post(
+  '/me/visits/:visitId/finish',
+  asyncHandler(async (req, res) => {
+    const visitId = String(req.params.visitId || '');
+    if (!/^[a-f\d]{24}$/i.test(visitId)) {
+      return res.status(400).json({ message: 'Visita no válida.' });
+    }
+
+    const deviceId = String(req.body?.deviceId || '').trim().slice(0, 120);
+    const filters = [{ user: req.user._id }];
+    if (deviceId) filters.push({ deviceId });
+
+    const visit = await Visit.findOne({
+      _id: visitId,
+      $or: filters,
+    });
+    if (!visit) {
+      return res.status(404).json({
+        message: 'No encontramos esa votación pendiente.',
+      });
+    }
+
+    if (!visit.closedAt) {
+      visit.closedAt = new Date();
+      await visit.save();
+    }
+
+    return res.json({
+      ok: true,
+      status: visit.status,
+      closedAt: visit.closedAt,
+    });
+  }),
+);
 
 function serializeCoupon(coupon, business, extra = {}) {
   return {

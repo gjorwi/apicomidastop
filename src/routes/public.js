@@ -393,12 +393,13 @@ router.post(
       );
       return res.status(409).json({
         code: 'ACTIVE_VISIT',
-        message:
-          votesRemaining > 0
+        message: existingVisit.closedAt
+          ? 'Finalizaste la votación de este local. Podrás volver a escanear cuando venza la visita de 24 horas.'
+          : votesRemaining > 0
             ? `Ya tienes una visita activa en este local y te quedan ${votesRemaining} votos. Usa el botón de votación pendiente para puntuar.`
             : 'Ya usaste los votos de tu visita a este local. Podrás volver a escanear cuando venza la visita de 24 horas.',
         visit: serializeVisit(existingVisit),
-        votesRemaining,
+        votesRemaining: existingVisit.closedAt ? 0 : votesRemaining,
       });
     }
 
@@ -689,6 +690,7 @@ router.post(
     const visitFilter = {
       business: business._id,
       status: 'active',
+      closedAt: null,
       expiresAt: { $gt: now },
       $or: [{ user: req.user._id }, { deviceId: normalizedDeviceId }],
     };
