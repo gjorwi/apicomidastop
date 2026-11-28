@@ -98,6 +98,12 @@ router.get(
     const businessMap = new Map(
       businesses.map((business) => [String(business._id), business]),
     );
+    const approvedBusinessIds = new Set(
+      businesses.map((business) => String(business._id)),
+    );
+    const availableProducts = products.filter((product) =>
+      approvedBusinessIds.has(String(product.business)),
+    );
 
     const items = categories.map((category) => {
       const ranking = buildCategoryRanking({
@@ -110,8 +116,16 @@ router.get(
       const business = top
         ? businessMap.get(String(top.product.business))
         : null;
+      const categoryProducts = availableProducts.filter(
+        (product) => product.categoryKey === category.key,
+      );
       return {
         ...serializeCategory(category),
+        available: categoryProducts.length > 0,
+        productCount: categoryProducts.length,
+        businessCount: new Set(
+          categoryProducts.map((product) => String(product.business)),
+        ).size,
         top: top
           ? {
               product: serializeProduct(top.product, business, top.metrics),
