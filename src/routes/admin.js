@@ -303,6 +303,23 @@ router.patch(
     ) {
       return res.status(400).json({ message: 'Fecha de premium no válida.' });
     }
+    if (req.body.featuredAd !== undefined) {
+      const featuredAd = req.body.featuredAd || {};
+      if (
+        featuredAd.isActive !== undefined &&
+        typeof featuredAd.isActive !== 'boolean'
+      ) {
+        return res.status(400).json({ message: 'Publicidad no válida.' });
+      }
+      if (featuredAd.position !== undefined) {
+        const position = Number(featuredAd.position);
+        if (!Number.isInteger(position) || position < 1 || position > 99) {
+          return res.status(400).json({
+            message: 'La posición de la publicidad debe estar entre 1 y 99.',
+          });
+        }
+      }
+    }
 
     const allowed = [
       'status',
@@ -314,6 +331,15 @@ router.patch(
     ];
     for (const key of allowed) {
       if (req.body[key] !== undefined) business[key] = req.body[key];
+    }
+    if (req.body.featuredAd !== undefined) {
+      const featuredAd = req.body.featuredAd || {};
+      business.featuredAd = {
+        isActive:
+          featuredAd.isActive ?? business.featuredAd?.isActive ?? false,
+        position:
+          featuredAd.position ?? business.featuredAd?.position ?? 1,
+      };
     }
     await business.save();
     if (business.owner) {

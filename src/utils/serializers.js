@@ -63,6 +63,13 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
     description: business.description,
     hours: business.hours,
     emoji: business.emoji,
+    featuredAd: {
+      isActive: Boolean(business.featuredAd?.isActive),
+      position:
+        Number.isFinite(business.featuredAd?.position)
+          ? business.featuredAd.position
+          : 1,
+    },
     isOpen: business.isOpen,
     isVerified: business.isVerified,
     status: business.status,
@@ -85,6 +92,7 @@ export function serializeBusiness(business, metrics = {}, category = null, optio
       : null,
     createdAt: business.createdAt,
     ...(options.withCover ? { coverImage: business.coverImage || '' } : {}),
+    ...(options.withLogo ? { logoImage: business.logoImage || '' } : {}),
   };
 }
 

@@ -80,7 +80,7 @@ async function businessBundle(business) {
       business,
       metrics,
       categoryMap.get(business.categoryKey),
-      { withCover: true },
+      { withCover: true, withLogo: true },
     ),
     serializedProducts: products
       .map((product) =>
@@ -137,12 +137,18 @@ router.put(
       'categoryOther',
       'hasDelivery',
       'coverImage',
+      'logoImage',
       'locationReference',
       'location',
     ];
     if (!isValidImage(req.body.coverImage)) {
       return res.status(400).json({
         message: 'La foto de portada debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
+      });
+    }
+    if (!isValidImage(req.body.logoImage)) {
+      return res.status(400).json({
+        message: 'El logo debe ser JPG, PNG o WebP y pesar menos de 500 KB.',
       });
     }
     const deliveryFeeFields = [

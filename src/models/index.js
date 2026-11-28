@@ -35,6 +35,11 @@ const BusinessSchema = new Schema(
     deliveryLongFee: { type: Number, default: null, min: 0 },
     freeDeliveryFrom: { type: Number, default: null, min: 0 },
     coverImage: { type: String, default: '' },
+    logoImage: { type: String, default: '' },
+    featuredAd: {
+      isActive: { type: Boolean, default: false },
+      position: { type: Number, default: 1, min: 1, max: 99 },
+    },
     locationReference: { type: String, default: '', trim: true },
     location: {
       lat: { type: Number, default: null },

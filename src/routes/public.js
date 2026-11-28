@@ -153,27 +153,48 @@ router.get(
       businesses.map((business) => [String(business._id), business]),
     );
 
-    res.json({
-      promotions: activePromotions
-        .filter((promotion) => productMap.has(String(promotion.product)))
-        .map((promotion) => {
-          const product = productMap.get(String(promotion.product));
-          const business = businessMap.get(String(promotion.business));
-          return {
-            id: String(promotion._id),
-            title: promotion.title,
-            note: promotion.note || '',
-            badge: promotion.badge || 'Oferta',
-            emoji: promotion.emoji || product.emoji || '🍽️',
-            tone: promotion.tone || 'accent',
-            price: promotion.price,
-            originalPrice: promotion.originalPrice,
-            productId: String(product._id),
-            businessId: business?.slug || '',
-            businessName: business?.name || '',
-          };
-        }),
-    });
+    const businessAds = businesses
+      .filter((business) => business.featuredAd?.isActive)
+      .map((business) => ({
+        id: `business-${business._id}`,
+        type: 'business',
+        title: business.name,
+        note: String(business.description || business.zone || '').trim(),
+        badge: 'Publicidad',
+        emoji: business.emoji || '🍽️',
+        businessId: business.slug,
+        businessName: business.name,
+        logoImage: business.logoImage || '',
+        order: Number(business.featuredAd?.position) || 1,
+      }));
+
+    const productPromotions = activePromotions
+      .filter((promotion) => productMap.has(String(promotion.product)))
+      .map((promotion) => {
+        const product = productMap.get(String(promotion.product));
+        const business = businessMap.get(String(promotion.business));
+        return {
+          id: String(promotion._id),
+          type: 'product',
+          title: promotion.title,
+          note: promotion.note || '',
+          badge: promotion.badge || 'Oferta',
+          emoji: promotion.emoji || product.emoji || '🍽️',
+          tone: promotion.tone || 'accent',
+          price: promotion.price,
+          originalPrice: promotion.originalPrice,
+          productId: String(product._id),
+          businessId: business?.slug || '',
+          businessName: business?.name || '',
+          order: Number(promotion.order) || 0,
+        };
+      });
+
+    const items = [...businessAds, ...productPromotions].sort(
+      (a, b) => a.order - b.order,
+    );
+
+    res.json({ promotions: items });
   }),
 );
 
@@ -314,7 +335,7 @@ router.get(
         business,
         metrics,
         categoryMap.get(business.categoryKey),
-        { withCover: true },
+        { withCover: true, withLogo: true },
       ),
       products: products.map((product) =>
         serializeProduct(product, business, metricsMap.get(String(product._id))),
