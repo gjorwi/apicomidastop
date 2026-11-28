@@ -165,6 +165,7 @@ router.get(
         businessId: business.slug,
         businessName: business.name,
         logoImage: business.logoImage || '',
+        coverImage: business.coverImage || '',
         order: Number(business.featuredAd?.position) || 1,
       }));
 
